@@ -51,9 +51,10 @@ class LightCurve:
             self.data = pd.DataFrame(columns=["mjd", "mag", "mag_err", "calexp_detector", "calexp_visit"])
         else:
             self.data = data
-        self.source = name
         self.model = model
         self.params = params
+        self.calexp_data_ref = None
+        self.calexp_dataIds = None
 
     def calculate_htm_id(self, level=20):
         pixelization = lsst.sphgeom.HtmPixelization(level)
@@ -98,7 +99,8 @@ class LightCurve:
 
         new_data = new_data.dropna(axis=1, how='all') # Excluir columnas con todos los valores NA antes de la concatenación
         self.data = pd.concat([self.data, new_data], ignore_index=True)
-        self.datasetRefs = datasetRefs  
+        self.calexp_data_ref = datasetRefs
+        self.calexp_dataIds = [{"visit": dataid.dataId["visit"], "detector": dataid.dataId["detector"]} for dataid in datasetRefs]
 
     def simulate(self, params, model="Pacz", plot=False):
         """
