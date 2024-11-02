@@ -10,7 +10,7 @@ from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 
 from matplotlib.patches import Circle
-import time
+# import times
 import gc
 import zipfile
 import sys
@@ -35,18 +35,25 @@ from lsst.meas.deblender import SourceDeblendTask
 from lsst.meas.base import SingleFrameMeasurementTask
 from lsst.meas.base import ForcedMeasurementTask
 
+# butler_config = 'dp02'
+butler_config = 'dp02-direct'
+collections = '2.2i/runs/DP0.2'
+butler = Butler(butler_config, collections=collections)
+
 class LightCurve:
-    def __init__ (self, ra=None, dec=None, band="i", data=None, name=None):
-        '''data = pd.DataFrame(columns=["Time", "mag", "mag_err", "calexp_detector", "calexp_visit"])'''
+    def __init__ (self, ra=None, dec=None, band="i", data=None, name=None, model = None, params = None):
+        '''data = pd.DataFrame(columns=["mjd", "mag", "mag_err", "calexp_detector", "calexp_visit"])'''
         self.ra = ra
         self.dec = dec
         self.htm_id = None
         self.band = band
         if data is None:
-            self.data = pd.DataFrame(columns=["Time", "mag", "mag_err", "calexp_detector", "calexp_visit"])
+            self.data = pd.DataFrame(columns=["mjd", "mag", "mag_err", "calexp_detector", "calexp_visit"])
         else:
             self.data = data
-        self.name = name 
+        self.source = name
+        self.model = model
+        self.params = params
 
     def calculate_htm_id(self, level=20):
         pixelization = lsst.sphgeom.HtmPixelization(level)
@@ -67,7 +74,7 @@ class LightCurve:
             "calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
         print("{:<20}".format("") + f"Found {len(datasetRefs)} calexps")
         ccd_visit = butler.get('ccdVisitTable')
-        times = []
+        mjds = []
         detectors = [] ; visits = []
         mags = []
         mag_errs = []
@@ -77,13 +84,13 @@ class LightCurve:
             ccdrow = (ccd_visit['visitId'] == did['visit']) & (
                 ccd_visit['detector'] == did['detector'])
             exp_midpoint = ccd_visit[ccdrow]['expMidptMJD'].values[0]
-            times.append(exp_midpoint)
+            mjds.append(exp_midpoint)
             detectors.append(did['detector'])  
             visits.append(did['visit'])          
             mags.append(np.nan) ; mag_errs.append(np.nan)  
             
         new_data = pd.DataFrame({
-            "Time": times,
+            "mjd": mjds,
             "mag": mags,
             "mag_err": mag_errs,
             "calexp_detector": detectors,
@@ -103,7 +110,7 @@ class LightCurve:
         plot (bool): If True, plot the magnification curve.
         
         Returns:
-        np.ndarray: Magnitudes corresponding to the times in self.data["Time"].
+        np.ndarray: Magnitudes corresponding to the mjds in self.data["mjd"].
         """
     
         if model == "Pacz":  # params = {t_0, t_E, u_0, m_base}
@@ -112,18 +119,19 @@ class LightCurve:
                 u_t = np.sqrt(u_0**2 + ((t - t_0) / t_E)**2)
                 A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
                 return m_base - 2.5 * np.log10(A_t)
-            m_t = Pacz(self.data["Time"], **params)
+            m_t = Pacz(self.data["mjd"], **params)
             self.data["mag"] = m_t
-            self.name = "Simulated - Pacz"
+            self.name = "Simulated"
+            self.model = "Pacz"
         else:
             raise ValueError("Model not recognized. Currently supported models: 'Pacz'.")
-    
+        self.params = params
         if plot:
-            t_plot = np.linspace(np.min(self.data["Time"]), np.max(self.data["Time"]), 1000)
+            t_plot = np.linspace(np.min(self.data["mjd"]), np.max(self.data["mjd"]), 1000)
             m_plot = Pacz(t_plot, **params)
             plt.plot(t_plot, m_plot, color='gray')
-            plt.scatter(self.data["Time"], m_t, color='red')
-            plt.xlabel('Time')
+            plt.scatter(self.data["mjd"], m_t, color='red')
+            plt.xlabel('mjd')
             plt.ylabel('Magnitude')
             plt.title('Microlensing - Paczynski')
             plt.gca().invert_yaxis() 

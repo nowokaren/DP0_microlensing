@@ -36,10 +36,8 @@ from lsst.meas.base import SingleFrameMeasurementTask
 from lsst.meas.base import ForcedMeasurementTask
 
 
-afwDisplay.setDefaultBackend('matplotlib')
-plt.style.use('tableau-colorblind10')
-
-butler_config = 'dp02'
+# butler_config = 'dp02'
+butler_config = 'dp02-direct'
 collections = '2.2i/runs/DP0.2'
 butler = Butler(butler_config, collections=collections)
 
@@ -130,8 +128,8 @@ class Calexp:
         if warp is not None:
             config = RegisterConfig()
             task = RegisterTask(name="register", config=config)
-            expF = task.warpExposure(self.expF, self.wcs, calexp_ref.wcs, calexp_ref.expF.getBBox())
-            ax = plt.subplot(projection=WCS(calexp_ref.wcs.getFitsMetadata()))
+            expF = task.warpExposure(self.expF, self.wcs, warp.wcs, warp.expF.getBBox())
+            ax = plt.subplot(projection=WCS(warp.wcs.getFitsMetadata()))
             return_ax = True
         ax.set_title(title, fontsize=8)
         ax.set_xlabel('RA (degrees)', fontsize=8)
@@ -157,7 +155,7 @@ class Calexp:
             if warp is None:
                 x,y = self.sky_to_pix(*roi[0])
             else:
-                x,y = calexp_ref.sky_to_pix(*roi[0])
+                x,y = warp.sky_to_pix(*roi[0])
             size = roi[1]
             ax.set_xlim(x - size / 2, x + size / 2)
             ax.set_ylim(y - size / 2, y + size / 2)
