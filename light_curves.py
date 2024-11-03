@@ -56,6 +56,11 @@ class LightCurve:
         self.calexp_data_ref = None
         self.calexp_dataIds = None
 
+    def __str__(self):
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Points: {len(self.data)}")
+    def __repr__(self):
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Points: {len(self.data)}")
+
     def calculate_htm_id(self, level=20):
         pixelization = lsst.sphgeom.HtmPixelization(level)
         htm_id = pixelization.index(
@@ -64,7 +69,7 @@ class LightCurve:
         circle = pixelization.triangle(htm_id).getBoundingCircle()
         scale = circle.getOpeningAngle().asDegrees()*3600
         level = pixelization.getLevel()
-        print("{:<20}".format(f'({self.ra}, {self.dec})') + f'HTM ID={htm_id} at level={level} is bounded by a circle of radius ~{scale:0.2f} arcsec.')
+        print(f'(ra,dec) = ({self.ra}, {self.dec})/nHTM_ID = {htm_id} - HTM_level={level} (bounded by a circle of radius ~{scale:0.2f} arcsec.)')
         self.htm_id = htm_id
         return htm_id
 
@@ -97,8 +102,12 @@ class LightCurve:
             "calexp_detector": detectors,
             "calexp_visit": visits})
 
-        new_data = new_data.dropna(axis=1, how='all') # Excluir columnas con todos los valores NA antes de la concatenación
-        self.data = pd.concat([self.data, new_data], ignore_index=True)
+        # Eliminar filas que son completamente NaN
+        new_data = new_data.dropna(how='all')
+        
+        # Verificar que new_data no esté vacío antes de concatenar
+        if not new_data.empty:
+            self.data = pd.concat([self.data, new_data], ignore_index=True)
         self.calexp_data_ref = datasetRefs
         self.calexp_dataIds = [{"visit": dataid.dataId["visit"], "detector": dataid.dataId["detector"]} for dataid in datasetRefs]
 
