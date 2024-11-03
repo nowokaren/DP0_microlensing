@@ -1,6 +1,7 @@
 dp0_limits = [[48, 76], [-44,-28]] # [ra_lim, dec_lim]
 import random
 import time
+from tqdm import tqdm
 import os
 from datetime import datetime
 import numpy as np
@@ -9,6 +10,10 @@ from astropy.table import Table, vstack
 from lsst.afw import table as afwTable
 from lsst.meas.base import SingleFrameMeasurementTask
 from lsst.meas.algorithms import SourceDetectionTask
+from lsst.source.injection import (
+    ingest_injection_catalog, generate_injection_catalog,
+    VisitInjectConfig, VisitInjectTask
+)
 from light_curves import LightCurve
 from exposures import Calexp
 
@@ -31,7 +36,7 @@ class Run:
         self.htm_level = htm_level
         self.inject_table = None
         
-    def add_lc(self, params, model="Pacz",  ra=None, dec=None):
+    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=0.5):
         if not ra and not dec:
             if len(self.inj_lc) == 0:
                 ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
@@ -39,8 +44,8 @@ class Run:
             else:
                 first_lc = self.inj_lc[0]
                 f_ra = first_lc.ra; f_dec = first_lc.dec
-                ra = random.uniform(f_ra-0.5, f_ra+0.5)
-                dec = random.uniform(f_dec-0.5, f_dec+0.5)
+                ra = random.uniform(f_ra-dist, f_ra+dist)
+                dec = random.uniform(f_dec-dist, f_dec+dist)
         lc = LightCurve(ra, dec)
         if len(self.inj_lc) == 0:
             lc.collect_calexp(self.htm_level)
@@ -54,37 +59,46 @@ class Run:
         lc.simulate(params, model=model)
         self.inj_lc.append(lc)
 
-    def inj_catalog(self, calexp):  # Estaba aca!!! Hay que ver como crear el catalogo para cada calexp segun que puntos son contenidos
-        ra_values = []; dec_values  = []; src_type = []; mask=[]
-        mjds = []; visits = []; detectors = []; var_mags = []
-        n = len(self.mjds)
+    def inject_task(self):
+        inject_config = VisitInjectConfig()
+        self.tasks["Injection"] = VisitInjectTask(config=inject_config)
+        
+    def inj_calexp(self, calexp, save_fit = None):
+        '''Creates injecting catalog and inject light curve's points if the calexp contains it.
+        save_fit = name of the file to be saved'''
+        self.log_task("Injection")
         for lc in self.inj_lc:
             if calexp.contains(lc.ra, lc.dec):
-                mask.append(True)
-            else:
-                mask.append(False)
-            var_mags.append(lc.data["mag"])
-        ra_values+=[lc.ra]*sum(mask)
-        dec_values+=[lc.dec]*sum(mask)
-        src_type+=["Star"]*sum(mask)
-        mjds.append(self.mjds[mask])
-        visits.append(self.visits[mask])
-        detectors.append(self.detectors[mask])
+                inject_table = Table([i, calexp.calexp_data["visit"], calexp.calexp_data["detector"], lc.ra, lc.dec,
+                                      "Star", self.mjds[i], lc.data["mag"][i]],
+                                     names=['injection_id', 'visit', 'detector', 'ra', 'dec',
+                                            'source_type', 'exp_midpoint', 'mag'])
+
+                exposure = calexp.expF
+                injected_output = self.tasks["Injection"].run(
+                    injection_catalogs=[inject_table],
+                    input_exposure=exposure.clone(),
+                    psf=exposure.getPsf(),
+                    photo_calib=exposure.getPhotoCalib(),
+                    wcs=calexp.wcs)
+                injected_exposure = injected_output.output_exposure
+                injected_catalog = injected_output.output_catalog
+    
+                if save_fit is not None:
+                    injected_exposure.writeFits(self.main_path+save_fit)
+                if i==0: 
+                    self.inject_table = injected_catalog
+                else:
+                    self.inject_table.add_row(inj.as_void())
+            return injected_exposure
+
         
-
-        inject_table = Table([np.arange(len(visits)), visits, detectors, ra_values , dec_values,
-                              src_type_arr, mjds, var_mags],
-                             names=['injection_id', 'visit', 'detector', 'ra', 'dec',
-                                    'source_type', 'exp_midpoint', 'mag'])
-        self.inject_table = inject_table
-
+        
     def log_task(self, name):
         self.task_log["time"].append(time.time())
         self.task_log["task"].append(task_name)
 
-    def inject_task(self):
-        inject_config = VisitInjectConfig()
-        self.tasks["Injection"]=VisitInjectTask(config=inject_config)
+
 
     def create_schema(self):
         schema = afwTable.SourceTable.makeMinimalSchema()
