@@ -75,21 +75,20 @@ class Run:
     def inj_calexp(self, calexp, save_fit = None):
         '''Creates injecting catalog and inject light curve's points if the calexp contains it.
         save_fit = name of the file to be saved'''
-        cont = 0
+        inj_lightcurves = []
         for i, lc in enumerate(self.inj_lc):
             if calexp.contains(lc.ra, lc.dec):
                 aux = []
-                data = [i, calexp.calexp_data["visit"], calexp.calexp_data["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag"][i]]
+                data = [i, calexp.calexp_data["visit"], calexp.calexp_data["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag_sim"][i]]
                 for item in data:
                     aux.append([item])
-                if cont == 0:
+                if len(inj_lightcurves) == 0:
                     inject_table =  Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
                 else:
                     inject_table = vstack([inject_table, Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])])
-                cont += 1
-                
-        if cont>0:
-            print(f"Points injected: {cont}")
+                inj_lightcurves.append(i)
+        if len(inj_lightcurves)>0:
+            print(f"Points injected: {len(inj_lightcurves)}")
             exposure = calexp.expF
             injected_output = self.tasks["Injection"].run(
                 injection_catalogs=[inject_table],
@@ -103,34 +102,93 @@ class Run:
 
             if save_fit is not None:
                 injected_exposure.writeFits(self.main_path+save_fit)
-            print(injected_catalog)
-            print(type(injected_catalog))
             if self.inject_table == None: 
                 self.inject_table = injected_catalog
             else:
                 self.inject_table = vstack([self.inject_table, injected_catalog])
-            return injected_exposure
+            return injected_exposure, inj_lightcurves
         else:
             print("No point is contained in the calexp")
+            return None, None
 
-    def detection_task(self, threshold = 5, threshold_type = "stdev"):
-        config = SourceDetectionTask.ConfigClass()
-        config.thresholdValue = threshold
-        config.thresholdType = threshold_type
-        self.tasks["Detection"]=SourceDetectionTask(schema=self.schema, config=config)
+    # def detection_task(self, threshold = 5, threshold_type = "stdev", schema = None):
+    #     config = SourceDetectionTask.ConfigClass()
+    #     config.thresholdValue = threshold
+    #     config.thresholdType = threshold_type
+    #     self.tasks["Detection"]=SourceDetectionTask(schema=self.schema, config=config)
+    #     return schema
 
-    def measure_task(self, plugins=None, name = "Measurement", schema = None):
-        '''plugin example = "base_SkyCoord", "base_PsfFlux", 'base_SdssCentroid' (just excecute these plugin measurment)'''
-        config = SingleFrameMeasurementTask.ConfigClass()
+    # def measure_task(self, plugins=None, name = "Measurement", schema = None):
+    #     '''plugin example = "base_SkyCoord", "base_PsfFlux", 'base_SdssCentroid' (just excecute these plugin measurment)'''
+    #     config = SingleFrameMeasurementTask.ConfigClass()
+    #     algMetadata = dafBase.PropertyList()
+    #     if schema is None:
+    #         schema = self.schema
+    #     if plugins:
+    #         for plugin_name in config_coord.plugins.keys():
+    #             config.plugins[plugin_name].doMeasure = False
+    #         for plugin in plugins:
+    #             config.plugins[plugin].doMeasure = True
+    #     self.tasks[name]= SingleFrameMeasurementTask(schema=schema,config=config)
+    #     return schema
+
+    # def detect_measure_task(self, threshold = 5, threshold_type = "stdev", meas_plugins=None, meas_name = "Measurement"):
+    #     schema = afwTable.SourceTable.makeMinimalSchema()
+    #     algMetadata = dafBase.PropertyList()
+    #     # schema.addField("coord_raErr", type="F", doc="Error in RA coordinate")
+    #     # schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
+        
+    #     config = SourceDetectionTask.ConfigClass()
+    #     config.thresholdValue = threshold
+    #     config.thresholdType = threshold_type
+    #     self.tasks["Detection"]=SourceDetectionTask(schema=schema, config=config)
+    #     config = SingleFrameMeasurementTask.ConfigClass()
+    #     if meas_plugins:
+    #         for plugin_name in config_coord.plugins.keys():
+    #             config.plugins[plugin_name].doMeasure = False
+    #         for plugin in plugins:
+    #             config.plugins[plugin].doMeasure = True
+    #     self.tasks[meas_name]= SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
+    #     return SourceDetectionTask(schema=schema, config=config), SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
+
+    def measure_task(self, approach = "First"):
+        schema = afwTable.SourceTable.makeMinimalSchema()
+        raerr = schema.addField("coord_raErr", type="F")
+        decerr = schema.addField("coord_decErr", type="F")
         algMetadata = dafBase.PropertyList()
-        if schema is None:
-            schema = self.schema
-        if plugins:
-            for plugin_name in config_coord.plugins.keys():
-                config.plugins[plugin_name].doMeasure = False
-            for plugin in plugins:
-                config.plugins[plugin].doMeasure = True
-        self.tasks[name]= SingleFrameMeasurementTask(schema=schema,config=config)
+        config = SourceDetectionTask.ConfigClass()
+        config.thresholdValue = 4
+        config.thresholdType = "stdev"
+        self.tasks["Detection"] = SourceDetectionTask(schema=schema, config=config)
+        del config
+        config = SingleFrameMeasurementTask.ConfigClass()
+        self.tasks["Measurement"] = SingleFrameMeasurementTask(schema=schema,
+                                                           config=config,
+                                                           algMetadata=algMetadata)
+        del config
+        return schema
+
+    def measure_calexp(self, calexp,schema):
+        tab = afwTable.SourceTable.make(schema)
+        del schema
+        result = self.tasks["Detection"].run(tab, calexp)
+        sources = result.sources
+        self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
+        return sources
+
+    def find_flux(self, sources, add_to_calexp=None):
+        fluxes = []; fluxes_err = []
+        for i, lc in enumerate(self.inj_lc):
+            flux = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001*search]["base_PsfFlux_instFlux"]
+            fluxes.append(flux)
+            flux_err = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001]["base_PsfFlux_instFluxErr"]
+            fluxes_err.append(flux_err)
+            if add_to_calexp != None:
+                lc.add_flux(flux, flux_err, add_to_calexp)
+        return fluxes, fluxes_err      
+                
+        
+
 
     def detect_measure_calexp(self, exposure):
         detect_result = self.tasks["Detection"].run(self.tab, exposure)

@@ -42,13 +42,13 @@ butler = Butler(butler_config, collections=collections)
 
 class LightCurve:
     def __init__ (self, ra=None, dec=None, band="i", data=None, name=None, model = None, params = None):
-        '''data = pd.DataFrame(columns=["mjd", "mag", "mag_err", "calexp_detector", "calexp_visit"])'''
+        '''data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])'''
         self.ra = ra
         self.dec = dec
         self.htm_id = None
         self.band = band
         if data is None:
-            self.data = pd.DataFrame(columns=["mjd", "mag", "mag_err", "calexp_detector", "calexp_visit"])
+            self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
         else:
             self.data = data
         self.model = model
@@ -82,8 +82,8 @@ class LightCurve:
         ccd_visit = butler.get('ccdVisitTable')
         mjds = []
         detectors = [] ; visits = []
-        mags = []
-        mag_errs = []
+        nans = []
+
 
         for calexp_data in datasetRefs:
             did = calexp_data.dataId
@@ -93,14 +93,17 @@ class LightCurve:
             mjds.append(exp_midpoint)
             detectors.append(did['detector'])  
             visits.append(did['visit'])          
-            mags.append(np.nan) ; mag_errs.append(np.nan)  
+            nans.append(np.nan)
             
         new_data = pd.DataFrame({
+            "detector": detectors,
+            "visit": visits,
             "mjd": mjds,
-            "mag": mags,
-            "mag_err": mag_errs,
-            "calexp_detector": detectors,
-            "calexp_visit": visits})
+            "mag_sim": nans,
+            "flux": nans,
+            "flux_err": nans,
+            "mag": nans,
+            "mag_err": nans})
 
         # Eliminar filas que son completamente NaN
         new_data = new_data.dropna(how='all')
@@ -131,7 +134,7 @@ class LightCurve:
                 A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
                 return m_base - 2.5 * np.log10(A_t)
             m_t = Pacz(self.data["mjd"], **params)
-            self.data["mag"] = m_t
+            self.data["mag_sim"] = m_t
             self.name = "Simulated"
             self.model = "Pacz"
         else:
@@ -147,3 +150,25 @@ class LightCurve:
             plt.title('Microlensing - Paczynski')
             plt.gca().invert_yaxis() 
             plt.show()
+        
+
+    def add_flux(self, flux, flux_err, dataId):
+        print(self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"])
+        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"] = flux
+        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux_err"] = flux_err
+
+
+
+    def add_mag(self, value, value_err, dataId, exposure = None):
+        '''If exposure is given, then values are expected to be fluxes and needs to be transformed to magnitude.'''
+        if exposure!=None:
+            photoCalib = exposure.getPhotoCalib()
+            value, value_err = photoCalib.instFluxToMagnitude(value, value_err)
+        self.data["mag"][self.data["visit"]==dataId["visit"] and self.data["detector"]==dataId["detector"]] = value
+        self.data["mag_err"][self.data["visit"]==dataId["visit"] and self.data["detector"]==dataId["detector"]] = value_err
+        if exposure!=None:
+            return value, value_err
+            # print(f"ra = {ra_deg}, dec = {dec_deg}")
+            # print("Measured ", measure)
+            # print("Injected ", lc.data["mag"][j])
+            

@@ -184,8 +184,8 @@ class Calexp:
             print('No sources to inject for visit ', inject_data['visit'], "Error:", e)
             return None
 
-    def to_mag(self, flux, flux_err):
-        """Convert flux to magnitude."""
-        photoCalib = self.calexp.getPhotoCalib()
-        measure = photoCalib.instFluxToMagnitude(flux, flux_err)
-        return measure.value, measure.error
+def to_mag(exposure, flux, flux_err):
+    """Convert flux to magnitude."""
+    photoCalib = self.expF.getPhotoCalib()
+    measure = photoCalib.instFluxToMagnitude(flux, flux_err)
+    return measure.value, measure.error
