@@ -163,12 +163,27 @@ class LightCurve:
         '''If exposure is given, then values are expected to be fluxes and needs to be transformed to magnitude.'''
         if exposure!=None:
             photoCalib = exposure.getPhotoCalib()
-            value, value_err = photoCalib.instFluxToMagnitude(value, value_err)
-        self.data["mag"][self.data["visit"]==dataId["visit"] and self.data["detector"]==dataId["detector"]] = value
-        self.data["mag_err"][self.data["visit"]==dataId["visit"] and self.data["detector"]==dataId["detector"]] = value_err
+            measure = photoCalib.instFluxToMagnitude(value, value_err)
+            value = measure.value; value_err = measure.error
+        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag"] = value
+        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag_err"] = value_err
         if exposure!=None:
             return value, value_err
             # print(f"ra = {ra_deg}, dec = {dec_deg}")
             # print("Measured ", measure)
             # print("Injected ", lc.data["mag"][j])
-            
+
+    def plot(self, sliced = "all"):
+        if sliced == "all":
+            df = self.data
+        else:
+            df = self.data[sliced]
+        plt.figure(figsize=(10, 6))
+        plt.plot(df['mjd'], df['mag_sim'], label='Magnitud Simulada', color='gray', marker='o')
+        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='.', capsize=3)
+        plt.xlabel('MJD (Modified Julian Date)')
+        plt.ylabel('Magnitud')
+        plt.title(str(self))
+        plt.gca().invert_yaxis()  
+        plt.legend()
+        plt.show()

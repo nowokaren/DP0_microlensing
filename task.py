@@ -17,6 +17,8 @@ from lsst.source.injection import (
 import lsst.daf.base as dafBase
 from light_curves import LightCurve
 from exposures import Calexp
+from scipy.spatial import KDTree
+import numpy as np
 
 class Run:
     def __init__(self, name=None, main_path = "runs/", htm_level=20):#, schema=None):
@@ -29,7 +31,7 @@ class Run:
         self.ext_lc = []
         self.schema = self.create_schema()
         self.tab = afwTable.SourceTable.make(self.schema)
-        self.log = {"task":["Start"], "time":[time.time()]}
+        self.log = {"task":["Start"], "time":[time.time()], "detail":[None]}
         self.calexp_data_ref = None
         self.mjds = None
         self.visits = None
@@ -37,9 +39,10 @@ class Run:
         self.htm_level = htm_level
         self.inject_table = None
 
-    def log_task(self, name):
+    def log_task(self, name, det=None):
         self.log["time"].append(time.time())
         self.log["task"].append(name)
+        self.log["detail"].append(det)
 
     def create_schema(self):
         schema = afwTable.SourceTable.makeMinimalSchema()
@@ -47,7 +50,7 @@ class Run:
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
         
-    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=0.5):
+    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=0.5, plot=False):
         if not ra and not dec:
             if len(self.inj_lc) == 0:
                 ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
@@ -65,7 +68,9 @@ class Run:
             self.calexp_dataIds =  [{"visit": dataref.dataId["visit"], "detector":dataref.dataId["detector"]} for dataref in self.calexp_data_ref]
         else:
             lc.data["mjd"] = self.mjds
-        lc.simulate(params, model=model)
+            lc.data["visit"] = self.inj_lc[0].data["visit"]
+            lc.data["detector"] = self.inj_lc[0].data["detector"]
+        lc.simulate(params, model=model, plot=plot)
         self.inj_lc.append(lc)
 
     def inject_task(self):
@@ -107,6 +112,7 @@ class Run:
             else:
                 self.inject_table = vstack([self.inject_table, injected_catalog])
             return injected_exposure, inj_lightcurves
+            self.log_task("Saving injection results")
         else:
             print("No point is contained in the calexp")
             return None, None
@@ -173,26 +179,65 @@ class Run:
         del schema
         result = self.tasks["Detection"].run(tab, calexp)
         sources = result.sources
+        self.log("Detection", det=len(sources))
         self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
+        self.log_task("Measurement")
         return sources
 
-    def find_flux(self, sources, add_to_calexp=None):
+
+    def find_flux(self, sources, inj_lc, add_to_calexp=None, search_factor=1):
         fluxes = []; fluxes_err = []
+        # for i, lc in enumerate(self.inj_lc):
+            # count = 0; point = []
+            # while len(point)!=1:
+            #     point = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001*search_factor]
+            #     if len(point)>1:
+            #         search_factor*=3/4
+            #     elif len(point)==0:
+            #         search_factor*=4/3
+            #     count+=1
+
+        sources_coords = np.column_stack((sources["coord_ra"], sources["coord_dec"]))
+        tree = KDTree(sources_coords)
+        initial_radius = 1e-7  # Radio inicial de búsqueda en radianes (~0.02 arcsec)
+        min_radius = 1e-10 
+        max_radius = 1e-5 
         for i, lc in enumerate(self.inj_lc):
-            flux = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001*search]["base_PsfFlux_instFlux"]
-            fluxes.append(flux)
-            flux_err = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001]["base_PsfFlux_instFluxErr"]
-            fluxes_err.append(flux_err)
-            if add_to_calexp != None:
-                lc.add_flux(flux, flux_err, add_to_calexp)
+            if i in inj_lc:
+                target_coords = [lc.ra*np.pi/180, lc.dec*np.pi/180]
+                search_radius = initial_radius
+                count = 0    
+                while True:
+                    idx = tree.query_ball_point(target_coords, r=search_radius)        
+                    if len(idx) == 1:
+                        break
+                    elif len(idx) > 1:
+                        search_radius *= 0.75
+                    else:
+                        search_radius *= 1.25
+                    search_radius = max(min_radius, min(search_radius, max_radius))
+                    count += 1
+                    if count > 100:
+                        print(f"No se pudo encontrar un único punto después de 100 iteraciones para la curva de luz {i}.")
+                        continue
+                point = sources[idx[0]]
+                flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
+                print(flux, flux_err)
+                print(f"Founded point in source table in {count} iteration/s")
+                fluxes.append(flux); fluxes_err.append(flux_err)
+                if add_to_calexp != None:
+                    lc.add_flux(flux, flux_err, add_to_calexp)
+                else:
+                    fluxes.append(np.nan); fluxes_err.append(np.nan)
+        self.log_task("Finding points", det = len(inj_lc))            
         return fluxes, fluxes_err      
                 
         
 
 
-    def detect_measure_calexp(self, exposure):
-        detect_result = self.tasks["Detection"].run(self.tab, exposure)
-        self.tasks["Measurement"].run(measCat=detect_result.sources, exposure=exposure) 
+    # def detect_measure_calexp(self, exposure):
+    #     detect_result = self.tasks["Detection"].run(self.tab, exposure)
+    #     self.tasks["Measurement"].run(measCat=detect_result.sources, exposure=exposure) 
         
 
 
@@ -210,54 +255,54 @@ class Run:
     #     self.name = "Deblend"
     #     self.task = SourceDeblendTask(schema=self.schema)
 
-    def forced_measure_task(self, ):
-        schema = self.schema #afwTable.SourceTable.makeMinimalSchema()
-        alias = schema.getAliasMap() 
-        x_key = schema.addField("centroid_x", type="D")
-        y_key = schema.addField("centroid_y", type="D")
-        alias.set("slot_Centroid", "centroid")
+    # def forced_measure_task(self, ):
+    #     schema = self.schema #afwTable.SourceTable.makeMinimalSchema()
+    #     alias = schema.getAliasMap() 
+    #     x_key = schema.addField("centroid_x", type="D")
+    #     y_key = schema.addField("centroid_y", type="D")
+    #     alias.set("slot_Centroid", "centroid")
         
-        xx_key = schema.addField("shape_xx", type="D")
-        yy_key = schema.addField("shape_yy", type="D")
-        xy_key = schema.addField("shape_xy", type="D")
-        alias.set("slot_Shape", "shape")
-        type_key = schema.addField("type_flag", type="F")
-        config = ForcedMeasurementTask.ConfigClass()
-        config.copyColumns = {}
-        config.plugins.names = ['base_SdssCentroid', "base_TransformedCentroid",
-            "base_PsfFlux",
-            "base_TransformedShape",
-        ]
-        config.doReplaceWithNoise = False
-        self.tasks["ForcedMeasurement"] = ForcedMeasurementTask(schema, config=config)
-        for j, contained in enumerate(ok):
-            if contained:
-                rai, deci = locs[j]
-                sourceRec = forcedSource.addNew()
-                coord = geom.SpherePoint(np.radians(rai) * geom.radians,
-                                         np.radians(deci) * geom.radians)
-                sourceRec.setCoord(coord)
-                sourceRec[x_key] = pix[j][0]
-                sourceRec[y_key] = pix[j][1]
-            # sourceRec[type_key] = 1
-        # print(forcedSource.asAstropy()[["coord_ra", "coord_dec", "centroid_x", "centroid_y"]])
-        forcedMeasCat = forcedMeasurementTask.generateMeasCat(calexp, forcedSource, calexp.getWcs())
-        forcedMeasurementTask.run(forcedMeasCat, calexp, forcedSource, calexp.getWcs())
-        sources = forcedMeasCat.asAstropy()
+    #     xx_key = schema.addField("shape_xx", type="D")
+    #     yy_key = schema.addField("shape_yy", type="D")
+    #     xy_key = schema.addField("shape_xy", type="D")
+    #     alias.set("slot_Shape", "shape")
+    #     type_key = schema.addField("type_flag", type="F")
+    #     config = ForcedMeasurementTask.ConfigClass()
+    #     config.copyColumns = {}
+    #     config.plugins.names = ['base_SdssCentroid', "base_TransformedCentroid",
+    #         "base_PsfFlux",
+    #         "base_TransformedShape",
+    #     ]
+    #     config.doReplaceWithNoise = False
+    #     self.tasks["ForcedMeasurement"] = ForcedMeasurementTask(schema, config=config)
+    #     for j, contained in enumerate(ok):
+    #         if contained:
+    #             rai, deci = locs[j]
+    #             sourceRec = forcedSource.addNew()
+    #             coord = geom.SpherePoint(np.radians(rai) * geom.radians,
+    #                                      np.radians(deci) * geom.radians)
+    #             sourceRec.setCoord(coord)
+    #             sourceRec[x_key] = pix[j][0]
+    #             sourceRec[y_key] = pix[j][1]
+    #         # sourceRec[type_key] = 1
+    #     # print(forcedSource.asAstropy()[["coord_ra", "coord_dec", "centroid_x", "centroid_y"]])
+    #     forcedMeasCat = forcedMeasurementTask.generateMeasCat(calexp, forcedSource, calexp.getWcs())
+    #     forcedMeasurementTask.run(forcedMeasCat, calexp, forcedSource, calexp.getWcs())
+    #     sources = forcedMeasCat.asAstropy()
 
 
-    def run(self, name, **kwargs):
-        if name in self.tasks and hasattr(self.tasks[name], "run"):
-            result = self.tasks[name].run(**kwargs)
-            self.log_task(task_name)
-            return result
-        else:
-            print(f"Task '{name}' isn't configured or it hasn't 'run' method.")
-        return None
+    # def run(self, name, **kwargs):
+    #     if name in self.tasks and hasattr(self.tasks[name], "run"):
+    #         result = self.tasks[name].run(**kwargs)
+    #         self.log_task(task_name)
+    #         return result
+    #     else:
+    #         print(f"Task '{name}' isn't configured or it hasn't 'run' method.")
+    #     return None
 
     def time_analysis(self):
-        times = self.task_log["time"]
-        task_names = self.task_log["task"]
+        times = self.log_task["time"]
+        task_names = self.log_task["task"]
         duration = [j - i for i, j in zip(times[:-1], times[1:])]
         unique_tasks = sorted(set(task_names))
         cmap = plt.get_cmap("tab20")  
