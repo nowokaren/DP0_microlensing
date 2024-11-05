@@ -117,45 +117,6 @@ class Run:
             print("No point is contained in the calexp")
             return None, None
 
-    # def detection_task(self, threshold = 5, threshold_type = "stdev", schema = None):
-    #     config = SourceDetectionTask.ConfigClass()
-    #     config.thresholdValue = threshold
-    #     config.thresholdType = threshold_type
-    #     self.tasks["Detection"]=SourceDetectionTask(schema=self.schema, config=config)
-    #     return schema
-
-    # def measure_task(self, plugins=None, name = "Measurement", schema = None):
-    #     '''plugin example = "base_SkyCoord", "base_PsfFlux", 'base_SdssCentroid' (just excecute these plugin measurment)'''
-    #     config = SingleFrameMeasurementTask.ConfigClass()
-    #     algMetadata = dafBase.PropertyList()
-    #     if schema is None:
-    #         schema = self.schema
-    #     if plugins:
-    #         for plugin_name in config_coord.plugins.keys():
-    #             config.plugins[plugin_name].doMeasure = False
-    #         for plugin in plugins:
-    #             config.plugins[plugin].doMeasure = True
-    #     self.tasks[name]= SingleFrameMeasurementTask(schema=schema,config=config)
-    #     return schema
-
-    # def detect_measure_task(self, threshold = 5, threshold_type = "stdev", meas_plugins=None, meas_name = "Measurement"):
-    #     schema = afwTable.SourceTable.makeMinimalSchema()
-    #     algMetadata = dafBase.PropertyList()
-    #     # schema.addField("coord_raErr", type="F", doc="Error in RA coordinate")
-    #     # schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
-        
-    #     config = SourceDetectionTask.ConfigClass()
-    #     config.thresholdValue = threshold
-    #     config.thresholdType = threshold_type
-    #     self.tasks["Detection"]=SourceDetectionTask(schema=schema, config=config)
-    #     config = SingleFrameMeasurementTask.ConfigClass()
-    #     if meas_plugins:
-    #         for plugin_name in config_coord.plugins.keys():
-    #             config.plugins[plugin_name].doMeasure = False
-    #         for plugin in plugins:
-    #             config.plugins[plugin].doMeasure = True
-    #     self.tasks[meas_name]= SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
-    #     return SourceDetectionTask(schema=schema, config=config), SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
 
     def measure_task(self, approach = "First"):
         schema = afwTable.SourceTable.makeMinimalSchema()
@@ -179,7 +140,7 @@ class Run:
         del schema
         result = self.tasks["Detection"].run(tab, calexp)
         sources = result.sources
-        self.log("Detection", det=len(sources))
+        self.log_task("Detection", det=len(sources))
         self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
         self.log_task("Measurement")
         return sources
@@ -230,9 +191,31 @@ class Run:
                 else:
                     fluxes.append(np.nan); fluxes_err.append(np.nan)
         self.log_task("Finding points", det = len(inj_lc))            
-        return fluxes, fluxes_err      
-                
+        return fluxes, fluxes_err  
+
+    def time_analysis(self):
+        times = self.log["time"]
+        task_names = self.log["task"]
+        duration = [j - i for i, j in zip(times[:-1], times[1:])]
+        unique_tasks = sorted(set(task_names))
+        cmap = plt.get_cmap("tab20")  
+        col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
+        task_colors = [col_task[task] for task in task_names[:-1]]
         
+        # plt.figure(figsize=(27, 6))
+        # plt.xlim(0, 720)
+        # plt.ylim(0, 15)
+        plt.bar(range(len(duration)), duration, color=task_colors, width=2)
+        for task in unique_tasks:
+            plt.bar(0, 0, color=col_task[task], label=task)
+        plt.xlabel("Step")
+        plt.ylabel("Duration (seconds)")
+        plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', ncol=min([6, len(unique_tasks)/2]), loc=(0, 1.01))
+        plt.savefig(f'{self.main_path}time_analysis.png', bbox_inches='tight')
+                
+    def save_lc(self):
+        for i, lc in enumerate(self.inj_lc):
+            lc.save(self.main_path+f"lc_{i}.cvs")
 
 
     # def detect_measure_calexp(self, exposure):
@@ -241,7 +224,45 @@ class Run:
         
 
 
+    # def detection_task(self, threshold = 5, threshold_type = "stdev", schema = None):
+    #     config = SourceDetectionTask.ConfigClass()
+    #     config.thresholdValue = threshold
+    #     config.thresholdType = threshold_type
+    #     self.tasks["Detection"]=SourceDetectionTask(schema=self.schema, config=config)
+    #     return schema
 
+    # def measure_task(self, plugins=None, name = "Measurement", schema = None):
+    #     '''plugin example = "base_SkyCoord", "base_PsfFlux", 'base_SdssCentroid' (just excecute these plugin measurment)'''
+    #     config = SingleFrameMeasurementTask.ConfigClass()
+    #     algMetadata = dafBase.PropertyList()
+    #     if schema is None:
+    #         schema = self.schema
+    #     if plugins:
+    #         for plugin_name in config_coord.plugins.keys():
+    #             config.plugins[plugin_name].doMeasure = False
+    #         for plugin in plugins:
+    #             config.plugins[plugin].doMeasure = True
+    #     self.tasks[name]= SingleFrameMeasurementTask(schema=schema,config=config)
+    #     return schema
+
+    # def detect_measure_task(self, threshold = 5, threshold_type = "stdev", meas_plugins=None, meas_name = "Measurement"):
+    #     schema = afwTable.SourceTable.makeMinimalSchema()
+    #     algMetadata = dafBase.PropertyList()
+    #     # schema.addField("coord_raErr", type="F", doc="Error in RA coordinate")
+    #     # schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
+        
+    #     config = SourceDetectionTask.ConfigClass()
+    #     config.thresholdValue = threshold
+    #     config.thresholdType = threshold_type
+    #     self.tasks["Detection"]=SourceDetectionTask(schema=schema, config=config)
+    #     config = SingleFrameMeasurementTask.ConfigClass()
+    #     if meas_plugins:
+    #         for plugin_name in config_coord.plugins.keys():
+    #             config.plugins[plugin_name].doMeasure = False
+    #         for plugin in plugins:
+    #             config.plugins[plugin].doMeasure = True
+    #     self.tasks[meas_name]= SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
+    #     return SourceDetectionTask(schema=schema, config=config), SingleFrameMeasurementTask(schema=schema, config=config, algMetadata=algMetadata)
 
 
 
@@ -300,23 +321,3 @@ class Run:
     #         print(f"Task '{name}' isn't configured or it hasn't 'run' method.")
     #     return None
 
-    def time_analysis(self):
-        times = self.log_task["time"]
-        task_names = self.log_task["task"]
-        duration = [j - i for i, j in zip(times[:-1], times[1:])]
-        unique_tasks = sorted(set(task_names))
-        cmap = plt.get_cmap("tab20")  
-        col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
-        task_colors = [col_task[task] for task in task_names[:-1]]
-        
-        plt.figure(figsize=(27, 6))
-        plt.xlim(0, 720)
-        plt.ylim(0, 15)
-        plt.bar(range(len(duration)), duration, color=task_colors, width=2)
-        for task in unique_tasks:
-            plt.bar(0, 0, color=col_task[task], label=task)
-        plt.xlabel("Step")
-        plt.ylabel("Duration (seconds)")
-        plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', ncol=6, loc=(0, 1.01))
-        plt.savefig(f'{self.main_path}time_analysis-points{n_points}-HTMlevel{level}.png', bbox_inches='tight')
-        print("Time analysis saved.")

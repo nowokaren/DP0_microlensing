@@ -76,15 +76,10 @@ class LightCurve:
     def collect_calexp(self, level=20):
         if not isinstance(self.htm_id, int):
             self.calculate_htm_id(level)
-        datasetRefs = list(butler.registry.queryDatasets(
-            "calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
-        print("{:<20}".format("") + f"Found {len(datasetRefs)} calexps")
+        datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        print(f"Found {len(datasetRefs)} calexps")
         ccd_visit = butler.get('ccdVisitTable')
-        mjds = []
-        detectors = [] ; visits = []
-        nans = []
-
-
+        mjds = []; detectors = [] ; visits = []; nans = []
         for calexp_data in datasetRefs:
             did = calexp_data.dataId
             ccdrow = (ccd_visit['visitId'] == did['visit']) & (
@@ -105,10 +100,7 @@ class LightCurve:
             "mag": nans,
             "mag_err": nans})
 
-        # Eliminar filas que son completamente NaN
         new_data = new_data.dropna(how='all')
-        
-        # Verificar que new_data no esté vacío antes de concatenar
         if not new_data.empty:
             self.data = pd.concat([self.data, new_data], ignore_index=True)
         self.calexp_data_ref = datasetRefs
@@ -153,7 +145,6 @@ class LightCurve:
         
 
     def add_flux(self, flux, flux_err, dataId):
-        print(self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"])
         self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"] = flux
         self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux_err"] = flux_err
 
@@ -179,11 +170,14 @@ class LightCurve:
         else:
             df = self.data[sliced]
         plt.figure(figsize=(10, 6))
-        plt.plot(df['mjd'], df['mag_sim'], label='Magnitud Simulada', color='gray', marker='o')
-        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='.', capsize=3)
+        plt.plot(df['mjd'], df['mag_sim'], label='Simulated', color='gray', marker='o', linestyle='')
+        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='o', capsize=3)
         plt.xlabel('MJD (Modified Julian Date)')
-        plt.ylabel('Magnitud')
+        plt.ylabel('Magnitude')
         plt.title(str(self))
         plt.gca().invert_yaxis()  
         plt.legend()
         plt.show()
+
+    def save(self, path):
+        self.data.to_csv(path, index=False)
