@@ -46,6 +46,7 @@ class LightCurve:
         self.ra = ra
         self.dec = dec
         self.htm_id = None
+        self.htm_level = None
         self.band = band
         if data is None:
             self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
@@ -71,6 +72,7 @@ class LightCurve:
         level = pixelization.getLevel()
         print(f'(ra,dec) = ({self.ra}, {self.dec})/nHTM_ID = {htm_id} - HTM_level={level} (bounded by a circle of radius ~{scale:0.2f} arcsec.)')
         self.htm_id = htm_id
+        self.htm_level = level
         return htm_id
 
     def collect_calexp(self, level=20):
@@ -169,7 +171,6 @@ class LightCurve:
             df = self.data
         else:
             df = self.data[sliced]
-        plt.figure(figsize=(10, 6))
         plt.plot(df['mjd'], df['mag_sim'], label='Simulated', color='gray', marker='o', linestyle='')
         plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='o', capsize=3)
         plt.xlabel('MJD (Modified Julian Date)')

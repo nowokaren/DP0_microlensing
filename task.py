@@ -19,6 +19,7 @@ from light_curves import LightCurve
 from exposures import Calexp
 from scipy.spatial import KDTree
 import numpy as np
+import matplotlib.pyplot as plt
 
 class Run:
     def __init__(self, name=None, main_path = "runs/", htm_level=20):#, schema=None):
@@ -28,16 +29,15 @@ class Run:
         os.makedirs(self.main_path, exist_ok=True)
         self.tasks = {}
         self.inj_lc = []
-        self.ext_lc = []
-        self.schema = self.create_schema()
-        self.tab = afwTable.SourceTable.make(self.schema)
         self.log = {"task":["Start"], "time":[time.time()], "detail":[None]}
         self.calexp_data_ref = None
         self.mjds = None
-        self.visits = None
-        self.detectors = None
         self.htm_level = htm_level
         self.inject_table = None
+        # self.schema = self.create_schema()
+        # self.tab = afwTable.SourceTable.make(self.schema)
+        # self.visits = None
+        # self.detectors = None
 
     def log_task(self, name, det=None):
         self.log["time"].append(time.time())
@@ -118,7 +118,7 @@ class Run:
             return None, None
 
 
-    def measure_task(self, approach = "First"):
+    def measure_task(self):
         schema = afwTable.SourceTable.makeMinimalSchema()
         raerr = schema.addField("coord_raErr", type="F")
         decerr = schema.addField("coord_decErr", type="F")
@@ -135,7 +135,7 @@ class Run:
         del config
         return schema
 
-    def measure_calexp(self, calexp,schema):
+    def measure_calexp(self, calexp, schema):
         tab = afwTable.SourceTable.make(schema)
         del schema
         result = self.tasks["Detection"].run(tab, calexp)
@@ -146,7 +146,7 @@ class Run:
         return sources
 
 
-    def find_flux(self, sources, inj_lc, add_to_calexp=None, search_factor=1):
+    def find_flux(self, sources, inj_lc, save=None, search_factor=1):
         fluxes = []; fluxes_err = []
         # for i, lc in enumerate(self.inj_lc):
             # count = 0; point = []
@@ -183,11 +183,10 @@ class Run:
                         continue
                 point = sources[idx[0]]
                 flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
-                print(flux, flux_err)
                 print(f"Founded point in source table in {count} iteration/s")
                 fluxes.append(flux); fluxes_err.append(flux_err)
-                if add_to_calexp != None:
-                    lc.add_flux(flux, flux_err, add_to_calexp)
+                if save != None:
+                    lc.add_flux(flux, flux_err, save)
                 else:
                     fluxes.append(np.nan); fluxes_err.append(np.nan)
         self.log_task("Finding points", det = len(inj_lc))            
@@ -216,6 +215,9 @@ class Run:
     def save_lc(self):
         for i, lc in enumerate(self.inj_lc):
             lc.save(self.main_path+f"lc_{i}.cvs")
+
+    def save_time_log(self):
+        pd.DataFrame(self.log).to_csv(self.main_path+'time_log.csv', index=False)
 
 
     # def detect_measure_calexp(self, exposure):
