@@ -77,7 +77,7 @@ class Run:
         inject_config = VisitInjectConfig()
         self.tasks["Injection"] = VisitInjectTask(config=inject_config)
         
-    def inj_calexp(self, calexp, save_fit = None):
+    def inject_calexp(self, calexp, save_fit = None):
         '''Creates injecting catalog and inject light curve's points if the calexp contains it.
         save_fit = name of the file to be saved'''
         inj_lightcurves = []
