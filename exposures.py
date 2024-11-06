@@ -169,20 +169,20 @@ class Calexp:
         circle = Circle((x, y), radius=r, edgecolor=c, facecolor="none")  # Ajusta `radius` como desees
         ax.add_patch(circle)
         
-    def inject(self, inject_data, inject_task, fits=None):
-        """Inject sources into the calexp."""
-        try:
-            injected_output = inject_task.run(
-                injection_catalogs=[inject_data],
-                input_exposure=self.calexp.clone()
-            )
-            injected_exposure = injected_output.output_exposure
-            if fits is not False:
-                injected_exposure.writeFits(fits)
-            return (self.calexp_data.dataId, inject_data['exp_midpoint'], inject_data['mag'], injected_exposure)
-        except Exception as e:
-            print('No sources to inject for visit ', inject_data['visit'], "Error:", e)
-            return None
+    # def inject(self, inject_data, inject_task, fits=None):
+    #     """Inject sources into the calexp."""
+    #     try:
+    #         injected_output = inject_task.run(
+    #             injection_catalogs=[inject_data],
+    #             input_exposure=self.calexp.clone()
+    #         )
+    #         injected_exposure = injected_output.output_exposure
+    #         if fits is not False:
+    #             injected_exposure.writeFits(fits)
+    #         return (self.calexp_data.dataId, inject_data['exp_midpoint'], inject_data['mag'], injected_exposure)
+    #     except Exception as e:
+    #         print('No sources to inject for visit ', inject_data['visit'], "Error:", e)
+    #         return None
 
 def to_mag(exposure, flux, flux_err):
     """Convert flux to magnitude."""

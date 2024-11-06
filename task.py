@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 class Run:
     def __init__(self, name=None, main_path = "runs/", htm_level=20):#, schema=None):
         date = datetime.now()
-        self.name = date.strftime("%Y%m%d_%H%M%S")
+        self.name = name if name else date.strftime("%Y%m%d_%H%M%S")
         self.main_path = main_path + self.name + "/"
         os.makedirs(self.main_path, exist_ok=True)
         self.tasks = {}
@@ -94,6 +94,7 @@ class Run:
                 inj_lightcurves.append(i)
         if len(inj_lightcurves)>0:
             print(f"Points injected: {len(inj_lightcurves)}")
+            print(inj_lightcurves)
             exposure = calexp.expF
             injected_output = self.tasks["Injection"].run(
                 injection_catalogs=[inject_table],
@@ -173,13 +174,13 @@ class Run:
                     if len(idx) == 1:
                         break
                     elif len(idx) > 1:
-                        search_radius *= 0.75
+                        search_radius *= 0.95
                     else:
-                        search_radius *= 1.25
+                        search_radius *= 1.05
                     search_radius = max(min_radius, min(search_radius, max_radius))
                     count += 1
-                    if count > 100:
-                        print(f"No se pudo encontrar un único punto después de 100 iteraciones para la curva de luz {i}.")
+                    if count > 1000:
+                        print(f"No se pudo encontrar un único punto después de 1000 iteraciones para la curva de luz {i}.")
                         continue
                 point = sources[idx[0]]
                 flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
