@@ -51,9 +51,9 @@ import warnings
 warnings.filterwarnings("ignore", message="Spacing is not a multiple of base spacing")
 
 class Calexp:
-    def __init__(self, calexp_data):
-        self.calexp_data = calexp_data
-        self.expF = butler.get('calexp', **calexp_data)
+    def __init__(self, data_id):
+        self.data_id = data_id
+        self.expF = butler.get('calexp', **data_id)
         self.wcs = self.expF.getWcs()
         self.cut = False
         self.warped  = False
@@ -110,7 +110,7 @@ class Calexp:
 
     def cutout(self,roi):
         exp=self.expF.getCutout(Point2D(*self.sky_to_pix(*roi[0])), Extent2I(roi[1]))
-        cutout = Calexp(self.calexp_data)
+        cutout = Calexp(self.data_id)
         cutout.wcs = exp.getWcs()
         cutout.expF = exp
         return cutout
@@ -179,13 +179,22 @@ class Calexp:
     #         injected_exposure = injected_output.output_exposure
     #         if fits is not False:
     #             injected_exposure.writeFits(fits)
-    #         return (self.calexp_data.dataId, inject_data['exp_midpoint'], inject_data['mag'], injected_exposure)
+    #         return (self.data_id.dataId, inject_data['exp_midpoint'], inject_data['mag'], injected_exposure)
     #     except Exception as e:
     #         print('No sources to inject for visit ', inject_data['visit'], "Error:", e)
     #         return None
 
-def to_mag(exposure, flux, flux_err):
+    def get_mag(self, flux, flux_err):
+        return flux_to_mag(self.expF, flux, flux_err)
+
+    def get_sources(self, detect_task, schema):
+        tab = afwTable.SourceTable.make(schema)
+        result = detect_task.run(tab, self)
+        return result.sources
+
+
+def flux_to_mag(exposure, flux, flux_err):
     """Convert flux to magnitude."""
-    photoCalib = self.expF.getPhotoCalib()
+    photoCalib = exposure.getPhotoCalib()
     measure = photoCalib.instFluxToMagnitude(flux, flux_err)
     return measure.value, measure.error

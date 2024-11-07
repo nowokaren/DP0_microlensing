@@ -20,6 +20,8 @@ from exposures import Calexp
 from scipy.spatial import KDTree
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.coordinates import SkyCoord
+                
 
 class Run:
     def __init__(self, name=None, main_path = "runs/", htm_level=20):#, schema=None):
@@ -84,7 +86,7 @@ class Run:
         for i, lc in enumerate(self.inj_lc):
             if calexp.contains(lc.ra, lc.dec):
                 aux = []
-                data = [i, calexp.calexp_data["visit"], calexp.calexp_data["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag_sim"][i]]
+                data = [i, calexp.data_id["visit"], calexp.data_id["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag_sim"][i]]
                 for item in data:
                     aux.append([item])
                 if len(inj_lightcurves) == 0:
@@ -128,19 +130,17 @@ class Run:
         config.thresholdValue = 4
         config.thresholdType = "stdev"
         self.tasks["Detection"] = SourceDetectionTask(schema=schema, config=config)
-        del config
         config = SingleFrameMeasurementTask.ConfigClass()
         self.tasks["Measurement"] = SingleFrameMeasurementTask(schema=schema,
                                                            config=config,
                                                            algMetadata=algMetadata)
-        del config
         return schema
 
     def measure_calexp(self, calexp, schema):
-        tab = afwTable.SourceTable.make(schema)
-        del schema
-        result = self.tasks["Detection"].run(tab, calexp)
-        sources = result.sources
+        # tab = afwTable.SourceTable.make(schema)
+        # result = self.tasks["Detection"].run(tab, calexp)
+        # sources = result.sources
+        sources = calexp.get_sources(self.tasks["Detection"], schema)
         self.log_task("Detection", det=len(sources))
         self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
         self.log_task("Measurement")
@@ -149,42 +149,16 @@ class Run:
 
     def find_flux(self, sources, inj_lc, save=None, search_factor=1):
         fluxes = []; fluxes_err = []
-        # for i, lc in enumerate(self.inj_lc):
-            # count = 0; point = []
-            # while len(point)!=1:
-            #     point = sources[abs(sources["coord_ra"]-lc.ra*np.pi/180)< 0.0000001*search_factor]
-            #     if len(point)>1:
-            #         search_factor*=3/4
-            #     elif len(point)==0:
-            #         search_factor*=4/3
-            #     count+=1
-
-        sources_coords = np.column_stack((sources["coord_ra"], sources["coord_dec"]))
-        tree = KDTree(sources_coords)
-        initial_radius = 1e-7  # Radio inicial de búsqueda en radianes (~0.02 arcsec)
-        min_radius = 1e-10 
-        max_radius = 1e-5 
         for i, lc in enumerate(self.inj_lc):
             if i in inj_lc:
-                target_coords = [lc.ra*np.pi/180, lc.dec*np.pi/180]
-                search_radius = initial_radius
-                count = 0    
-                while True:
-                    idx = tree.query_ball_point(target_coords, r=search_radius)        
-                    if len(idx) == 1:
-                        break
-                    elif len(idx) > 1:
-                        search_radius *= 0.95
-                    else:
-                        search_radius *= 1.05
-                    search_radius = max(min_radius, min(search_radius, max_radius))
-                    count += 1
-                    if count > 1000:
-                        print(f"No se pudo encontrar un único punto después de 1000 iteraciones para la curva de luz {i}.")
-                        continue
-                point = sources[idx[0]]
+                print(f'Searching in lc {i}')
+                # ra,dec = [lc.ra*np.pi/180, lc.dec*np.pi/180]
+                target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
+                source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
+                distances = source_coords.separation(target_coord)
+                closest_index = np.argmin(distances)
+                point = sources[closest_index]
                 flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
-                print(f"Founded point in source table in {count} iteration/s")
                 fluxes.append(flux); fluxes_err.append(flux_err)
                 if save != None:
                     lc.add_flux(flux, flux_err, save)

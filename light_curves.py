@@ -78,7 +78,9 @@ class LightCurve:
     def collect_calexp(self, level=20):
         if not isinstance(self.htm_id, int):
             self.calculate_htm_id(level)
-        datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        # datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        # Usa la cláusula OVERLAPS en lugar de htm20
+        datasetRefs = list(butler.registry.queryDatasets("calexp", where=f"band = '{self.band}' AND scisql_nano.OVERLAPS(coord, {self.htm_id})"))
         print(f"Found {len(datasetRefs)} calexps")
         ccd_visit = butler.get('ccdVisitTable')
         mjds = []; detectors = [] ; visits = []; nans = []
@@ -102,9 +104,10 @@ class LightCurve:
             "mag": nans,
             "mag_err": nans})
 
-        new_data = new_data.dropna(how='all')
+        new_data_filtered = new_data.dropna(how="all", axis=1)  
+        new_data_filtered = new_data_filtered.dropna(how="all", axis=0)  
         if not new_data.empty:
-            self.data = pd.concat([self.data, new_data], ignore_index=True)
+            self.data = pd.concat([self.data, new_data_filtered], ignore_index=True)
         self.calexp_data_ref = datasetRefs
         self.calexp_dataIds = [{"visit": dataid.dataId["visit"], "detector": dataid.dataId["detector"]} for dataid in datasetRefs]
 
