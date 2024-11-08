@@ -78,9 +78,8 @@ class LightCurve:
     def collect_calexp(self, level=20):
         if not isinstance(self.htm_id, int):
             self.calculate_htm_id(level)
-        # datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
-        # Usa la cláusula OVERLAPS en lugar de htm20
-        datasetRefs = list(butler.registry.queryDatasets("calexp", where=f"band = '{self.band}' AND scisql_nano.OVERLAPS(coord, {self.htm_id})"))
+        datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        # datasetRefs = list(butler.registry.queryDatasets("calexp", where=f"band = '{self.band}' AND scisql_nano.OVERLAPS(coord, {self.htm_id})"))
         print(f"Found {len(datasetRefs)} calexps")
         ccd_visit = butler.get('ccdVisitTable')
         mjds = []; detectors = [] ; visits = []; nans = []
@@ -169,7 +168,7 @@ class LightCurve:
             # print("Measured ", measure)
             # print("Injected ", lc.data["mag"][j])
 
-    def plot(self, sliced = "all"):
+    def plot(self, title = None, sliced = "all"):
         if sliced == "all":
             df = self.data
         else:
@@ -178,7 +177,9 @@ class LightCurve:
         plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='o', capsize=3)
         plt.xlabel('MJD (Modified Julian Date)')
         plt.ylabel('Magnitude')
-        plt.title(str(self))
+        if title is None:
+            title = str(self)
+        plt.title(title)
         plt.gca().invert_yaxis()  
         plt.legend()
         plt.show()

@@ -21,6 +21,8 @@ from scipy.spatial import KDTree
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
+from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
+from shapely.geometry import Polygon
                 
 
 class Run:
@@ -35,6 +37,7 @@ class Run:
         self.calexp_data_ref = None
         self.mjds = None
         self.htm_level = htm_level
+        self.htm_id = None
         self.inject_table = None
         # self.schema = self.create_schema()
         # self.tab = afwTable.SourceTable.make(self.schema)
@@ -68,6 +71,7 @@ class Run:
             self.calexp_data_ref = lc.calexp_data_ref
             self.mjds = lc.data["mjd"]
             self.calexp_dataIds =  [{"visit": dataref.dataId["visit"], "detector":dataref.dataId["detector"]} for dataref in self.calexp_data_ref]
+            self.htm_id = lc.htm_id
         else:
             lc.data["mjd"] = self.mjds
             lc.data["visit"] = self.inj_lc[0].data["visit"]
@@ -94,8 +98,9 @@ class Run:
                 else:
                     inject_table = vstack([inject_table, Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])])
                 inj_lightcurves.append(i)
+        n_inj = len(inj_lightcurves)
         if len(inj_lightcurves)>0:
-            print(f"Points injected: {len(inj_lightcurves)}")
+            print(f"Points injected: {n_inj}")
             print(inj_lightcurves)
             exposure = calexp.expF
             injected_output = self.tasks["Injection"].run(
@@ -106,7 +111,7 @@ class Run:
                 wcs=calexp.wcs)
             injected_exposure = injected_output.output_exposure
             injected_catalog = injected_output.output_catalog
-            self.log_task("Injection")
+            self.log_task("Injection", det = n_inj)
 
             if save_fit is not None:
                 injected_exposure.writeFits(self.main_path+save_fit)
@@ -137,10 +142,10 @@ class Run:
         return schema
 
     def measure_calexp(self, calexp, schema):
-        # tab = afwTable.SourceTable.make(schema)
-        # result = self.tasks["Detection"].run(tab, calexp)
-        # sources = result.sources
-        sources = calexp.get_sources(self.tasks["Detection"], schema)
+        tab = afwTable.SourceTable.make(schema)
+        result = self.tasks["Detection"].run(tab, calexp)
+        sources = result.sources
+        # sources = calexp.get_sources(self.tasks["Detection"], schema)
         self.log_task("Detection", det=len(sources))
         self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
         self.log_task("Measurement")
@@ -153,11 +158,21 @@ class Run:
             if i in inj_lc:
                 print(f'Searching in lc {i}')
                 # ra,dec = [lc.ra*np.pi/180, lc.dec*np.pi/180]
-                target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
-                source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
-                distances = source_coords.separation(target_coord)
-                closest_index = np.argmin(distances)
-                point = sources[closest_index]
+                
+                # target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
+                # source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
+                # distances = source_coords.separation(target_coord)
+                # closest_index = np.argmin(distances)
+                # point = sources[closest_index]
+                dif_ra = abs(sources["coord_ra"]-lc.ra*np.pi/180)
+                dif_dec = abs(sources["coord_dec"]-lc.dec*np.pi/180)
+                idx_ra = np.argmin(dif_ra);idx_dec = np.argmin(dif_dec)
+                if idx_ra != idx_dec:
+                    min_dif = [dif_ra[idx_ra], dif_dec[idx_dec]]
+                    idx = np.argmin(min_dif)
+                    if idx == 1:
+                        idx_ra = idx_dec
+                point = sources[idx_ra]
                 flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
                 fluxes.append(flux); fluxes_err.append(flux_err)
                 if save != None:
@@ -167,6 +182,59 @@ class Run:
         self.log_task("Finding points", det = len(inj_lc))            
         return fluxes, fluxes_err  
 
+    def sky_map(self, color='red', lwT=2, lwC=2, calexps=True):
+        ra_vals = [lc.ra for lc in self.inj_lc]
+        dec_vals = [lc.dec for lc in self.inj_lc]
+        pixelization = HtmPixelization(self.htm_level)
+        htm_triangle = pixelization.triangle(self.htm_id)
+        tri_ra_dec = []
+        for vertex in htm_triangle.getVertices():
+            lon = LonLat.longitudeOf(vertex).asDegrees()
+            lat = LonLat.latitudeOf(vertex).asDegrees()
+            tri_ra_dec.append((lon, lat))
+        htm_polygon = Polygon(tri_ra_dec)
+        x, y = htm_polygon.exterior.xy
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points", alpha=0.6)#, edgecolor='k')
+        ax.set_xlabel("ra (deg)")
+        ax.set_ylabel("dec (deg)")
+        ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
+
+        if calexps:
+            ok = True
+            for dataRef in tqdm(self.calexp_data_ref, desc="Loading calexps"):
+                data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
+                calexp = Calexp(data_id)
+                ra_corners, dec_corners = calexp.get_corners()  # Suponiendo que se tiene esta función para obtener las esquinas
+                polygon = Polygon(zip(ra_corners, dec_corners))
+                # if polygon.contains(Point(ra_vals[0], dec_vals[0])):  # Ajustar el punto según necesidad
+                x_poly, y_poly = polygon.exterior.xy
+                if ok:
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.1, label="calexp")
+                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC) 
+                    ok = False
+                else:
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.1)  
+                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC)  # Contorno con alpha más alto
+                # ax.plot(x_poly, y_poly, color='gray', alpha=0.25, linewidth=lwC, label="Calexp")
+
+            #     RA.append(ra_corners)
+            #     DEC.append(dec_corners)
+
+            # polygons = [Polygon(zip(ra, dec)) for ra, dec in zip(RA, DEC)]
+            # for polygon in polygons:
+            #     if polygon.contains(Point(ra_vals[0], dec_vals[0])):  # Se puede ajustar para otros puntos
+            #         x_poly, y_poly = polygon.exterior.xy
+            #         ax.plot(x_poly, y_poly, color='green', alpha=0.25, linewidth=lwc, label="Calexp")
+
+                
+        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--")
+        plt.legend(loc=(1.01,0))
+        plt.grid(True)
+        plt.show()
+        self.log_task("Plotting sky map")
+
+    
     def time_analysis(self):
         times = self.log["time"]
         task_names = self.log["task"]
@@ -189,7 +257,7 @@ class Run:
                 
     def save_lc(self):
         for i, lc in enumerate(self.inj_lc):
-            lc.save(self.main_path+f"lc_{i}.cvs")
+            lc.save(self.main_path+f"lc_{i}.csv")
 
     def save_time_log(self):
         pd.DataFrame(self.log).to_csv(self.main_path+'time_log.csv', index=False)
