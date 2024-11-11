@@ -226,42 +226,81 @@ class Run:
         self.log_task("Plotting sky map")
 
 
-    def time_analysis(self):
-        times = self.log["time"][1:]
-        task_names = self.log["task"][1:]
-        details = self.log["detail"][1:]
-        duration = [j - i for i, j in zip(times[:-1], times[1:])]
+    # def time_analysis(self):
+    #     times = self.log["time"][1:]
+    #     task_names = self.log["task"][1:]
+    #     details = self.log["detail"][1:]
+    #     duration = [j - i for i, j in zip(times[:-1], times[1:])]
+    #     unique_tasks = sorted(set(task_names))
+    #     cmap = plt.get_cmap("tab20")
+    #     col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
+    #     task_colors = [col_task[task] for task in task_names[:-1]]
+        
+    #     plt.figure(figsize=(27, 6))
+        
+    #     # Define límites del gráfico
+    #     plt.xlim(0, len(duration))  # Basado en la cantidad de pasos
+    #     plt.ylim(0, max(duration) * 1.1)  # Agrega espacio para las etiquetas
+        
+    #     # Graficar las barras
+    #     bars = plt.bar(range(len(duration)), duration, color=task_colors, width=2)
+        
+    #     # Agregar etiquetas de `detail` sobre cada barra
+    #     for i, (bar, detail) in enumerate(zip(bars, details)):
+    #         if detail is not None:  # Solo agrega texto si `detail` no es None
+    #             plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 0.8, 
+    #                      f'{detail}', ha='center', va='center', fontsize=8, color='black')
+        
+    #     # Agregar leyenda
+    #     for task in unique_tasks:
+    #         plt.bar(0, 0, color=col_task[task], label=task)
+        
+    #     # Configuración de etiquetas y leyenda
+    #     plt.xlabel("Step")
+    #     plt.ylabel("Duration (seconds)")
+    #     plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', 
+    #                ncol=min([6, len(unique_tasks) // 2]), loc=(0, 1.01))
+        
+    #     # Guardar el gráfico
+    #     plt.savefig(f'{self.main_path}time_analysis.png', bbox_inches='tight')
+    #     plt.show()
+
+    def time_analysis(self, path=None):
+        if path != None:
+            df = pd.read_csv(path)
+        else:
+            df = self.log
+        
+        times = df["time"]
+        task_names = df["task"][2:]
+        details = df["detail"][2:]
+        duration = [j - i for i, j in zip(times[:-1], times[1:])][1:]
         unique_tasks = sorted(set(task_names))
-        cmap = plt.get_cmap("tab20")
+        # cmap = plt.get_cmap("tab20")
+        cmap = plt.get_cmap("Pastel1")
         col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
         task_colors = [col_task[task] for task in task_names[:-1]]
+        plt.figure(figsize=(10, 6))
+        plt.xlim(0, len(duration))
+        plt.ylim(0, max(duration) * 1.1)
+
+        x_positions = np.arange(len(duration))
+        bar_width = 1
+        bars = plt.bar(x_positions, duration, color=task_colors, width=bar_width)
         
-        plt.figure(figsize=(27, 6))
+        for i, (bar, detail, task) in enumerate(zip(bars, details, task_names)):
+            if str(detail) != "nan" and task!= "Finding points":  
+                plt.text(bar.get_x() + bar.get_width() * 0.5, bar.get_height() * 1.03, 
+                         f'{int(detail)}', ha='center', va='center', fontsize=10, color='black')
         
-        # Define límites del gráfico
-        plt.xlim(0, len(duration))  # Basado en la cantidad de pasos
-        plt.ylim(0, max(duration) * 1.1)  # Agrega espacio para las etiquetas
-        
-        # Graficar las barras
-        bars = plt.bar(range(len(duration)), duration, color=task_colors, width=2)
-        
-        # Agregar etiquetas de `detail` sobre cada barra
-        for i, (bar, detail) in enumerate(zip(bars, details)):
-            if detail is not None:  # Solo agrega texto si `detail` no es None
-                plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 0.8, 
-                         f'{detail}', ha='center', va='center', fontsize=8, color='black')
-        
-        # Agregar leyenda
         for task in unique_tasks:
             plt.bar(0, 0, color=col_task[task], label=task)
         
-        # Configuración de etiquetas y leyenda
         plt.xlabel("Step")
         plt.ylabel("Duration (seconds)")
         plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', 
                    ncol=min([6, len(unique_tasks) // 2]), loc=(0, 1.01))
-        
-        # Guardar el gráfico
+
         plt.savefig(f'{self.main_path}time_analysis.png', bbox_inches='tight')
         plt.show()
 
