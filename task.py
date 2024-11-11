@@ -182,7 +182,50 @@ class Run:
         self.log_task("Finding points", det = len(inj_lc))            
         return fluxes, fluxes_err  
 
-    def sky_map(self, color='red', lwT=2, lwC=2, calexps=True):
+    # def sky_map(self, color='red', lwT=2, lwC=2, calexps=True):
+    #     ra_vals = [lc.ra for lc in self.inj_lc]
+    #     dec_vals = [lc.dec for lc in self.inj_lc]
+    #     pixelization = HtmPixelization(self.htm_level)
+    #     htm_triangle = pixelization.triangle(self.htm_id)
+    #     tri_ra_dec = []
+    #     for vertex in htm_triangle.getVertices():
+    #         lon = LonLat.longitudeOf(vertex).asDegrees()
+    #         lat = LonLat.latitudeOf(vertex).asDegrees()
+    #         tri_ra_dec.append((lon, lat))
+    #     htm_polygon = Polygon(tri_ra_dec)
+    #     x, y = htm_polygon.exterior.xy
+    #     fig, ax = plt.subplots(figsize=(8, 6))
+    
+    #     if calexps:
+    #         ok = True
+    #         for dataRef in tqdm(self.calexp_data_ref, desc="Loading calexps"):
+    #             data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
+    #             calexp = Calexp(data_id)
+    #             ra_corners, dec_corners = calexp.get_corners()  # Suponiendo que se tiene esta función para obtener las esquinas
+    #             polygon = Polygon(zip(ra_corners, dec_corners))
+    #             x_poly, y_poly = polygon.exterior.xy
+    #             if ok:
+    #                 ax.fill(x_poly, y_poly, color='gray', alpha=0.05, label="calexp")
+    #                 ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC) 
+    #                 ok = False
+    #             else:
+    #                 ax.fill(x_poly, y_poly, color='gray', alpha=0.05)  
+    #                 ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC)  # Contorno con alpha más alto
+    
+    #     # Aquí asegúrate de que los puntos y el triángulo se grafiquen después
+    #     ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  # Puntos encima de calexps
+    #     ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--")  # Triángulo encima de calexps
+    
+    #     ax.set_xlabel("ra (deg)")
+    #     ax.set_ylabel("dec (deg)")
+    #     ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
+    #     plt.legend(loc=(1.01,0))
+    #     plt.grid(True)
+    #     plt.savefig(self.main_path+"sky_map.png")
+    #     plt.show()
+    #     self.log_task("Plotting sky map")
+
+    def sky_map(self, color='red', lwT=1, lwC=1, calexps=True):
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         pixelization = HtmPixelization(self.htm_level)
@@ -195,11 +238,7 @@ class Run:
         htm_polygon = Polygon(tri_ra_dec)
         x, y = htm_polygon.exterior.xy
         fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points", alpha=0.6)#, edgecolor='k')
-        ax.set_xlabel("ra (deg)")
-        ax.set_ylabel("dec (deg)")
-        ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
-
+    
         if calexps:
             ok = True
             for dataRef in tqdm(self.calexp_data_ref, desc="Loading calexps"):
@@ -207,54 +246,91 @@ class Run:
                 calexp = Calexp(data_id)
                 ra_corners, dec_corners = calexp.get_corners()  # Suponiendo que se tiene esta función para obtener las esquinas
                 polygon = Polygon(zip(ra_corners, dec_corners))
-                # if polygon.contains(Point(ra_vals[0], dec_vals[0])):  # Ajustar el punto según necesidad
                 x_poly, y_poly = polygon.exterior.xy
                 if ok:
-                    ax.fill(x_poly, y_poly, color='gray', alpha=0.1, label="calexp")
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05, label="calexp")
                     ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC) 
                     ok = False
                 else:
-                    ax.fill(x_poly, y_poly, color='gray', alpha=0.1)  
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05)  
                     ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC)  # Contorno con alpha más alto
-                # ax.plot(x_poly, y_poly, color='gray', alpha=0.25, linewidth=lwC, label="Calexp")
-
-            #     RA.append(ra_corners)
-            #     DEC.append(dec_corners)
-
-            # polygons = [Polygon(zip(ra, dec)) for ra, dec in zip(RA, DEC)]
-            # for polygon in polygons:
-            #     if polygon.contains(Point(ra_vals[0], dec_vals[0])):  # Se puede ajustar para otros puntos
-            #         x_poly, y_poly = polygon.exterior.xy
-            #         ax.plot(x_poly, y_poly, color='green', alpha=0.25, linewidth=lwc, label="Calexp")
-
-                
-        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--")
+    
+        # Aquí asegúrate de que los puntos y el triángulo se grafiquen después
+        ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  # Puntos encima de calexps
+        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--")  # Triángulo encima de calexps
+    
+        ax.set_xlabel("ra (deg)")
+        ax.set_ylabel("dec (deg)")
+        ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
         plt.legend(loc=(1.01,0))
         plt.grid(True)
+        plt.savefig(self.main_path+"sky_map.png")
         plt.show()
         self.log_task("Plotting sky map")
 
+
     
+    # def time_analysis(self):
+    #     times = self.log["time"][1:]
+    #     task_names = self.log["task"][1:]
+    #     details = self.log["detail"][1:]
+    #     duration = [j - i for i, j in zip(times[:-1], times[1:])]
+    #     unique_tasks = sorted(set(task_names))
+    #     cmap = plt.get_cmap("tab20")  
+    #     col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
+    #     task_colors = [col_task[task] for task in task_names[:-1]]
+        
+    #     # plt.figure(figsize=(27, 6))
+    #     # plt.xlim(0, 720)
+    #     # plt.ylim(0, 15)
+    #     plt.bar(range(len(duration)), duration, color=task_colors, width=2)
+    #     for task in unique_tasks:
+    #         plt.bar(0, 0, color=col_task[task], label=task)
+    #     plt.xlabel("Step")
+    #     plt.ylabel("Duration (seconds)")
+    #     plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', ncol=min([6, len(unique_tasks)/2]), loc=(0, 1.01))
+    #     plt.savefig(f'{self.main_path}time_analysis.png', bbox_inches='tight')
+
+
     def time_analysis(self):
-        times = self.log["time"]
-        task_names = self.log["task"]
+        times = self.log["time"][1:]
+        task_names = self.log["task"][1:]
+        details = self.log["detail"][1:]
         duration = [j - i for i, j in zip(times[:-1], times[1:])]
         unique_tasks = sorted(set(task_names))
-        cmap = plt.get_cmap("tab20")  
+        cmap = plt.get_cmap("tab20")
         col_task = {task: cmap(i / len(unique_tasks)) for i, task in enumerate(unique_tasks)}
         task_colors = [col_task[task] for task in task_names[:-1]]
         
-        # plt.figure(figsize=(27, 6))
-        # plt.xlim(0, 720)
-        # plt.ylim(0, 15)
-        plt.bar(range(len(duration)), duration, color=task_colors, width=2)
+        plt.figure(figsize=(27, 6))
+        
+        # Define límites del gráfico
+        plt.xlim(0, len(duration))  # Basado en la cantidad de pasos
+        plt.ylim(0, max(duration) * 1.1)  # Agrega espacio para las etiquetas
+        
+        # Graficar las barras
+        bars = plt.bar(range(len(duration)), duration, color=task_colors, width=2)
+        
+        # Agregar etiquetas de `detail` sobre cada barra
+        for i, (bar, detail) in enumerate(zip(bars, details)):
+            if detail is not None:  # Solo agrega texto si `detail` no es None
+                plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 0.8, 
+                         f'{detail}', ha='center', va='center', fontsize=8, color='black')
+        
+        # Agregar leyenda
         for task in unique_tasks:
             plt.bar(0, 0, color=col_task[task], label=task)
+        
+        # Configuración de etiquetas y leyenda
         plt.xlabel("Step")
         plt.ylabel("Duration (seconds)")
-        plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', ncol=min([6, len(unique_tasks)/2]), loc=(0, 1.01))
+        plt.legend(title=f'Tasks - Duration: {np.sum(duration) / 60:.2f} min', 
+                   ncol=min([6, len(unique_tasks) // 2]), loc=(0, 1.01))
+        
+        # Guardar el gráfico
         plt.savefig(f'{self.main_path}time_analysis.png', bbox_inches='tight')
-                
+        plt.show()
+
     def save_lc(self):
         for i, lc in enumerate(self.inj_lc):
             lc.save(self.main_path+f"lc_{i}.csv")

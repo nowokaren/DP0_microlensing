@@ -50,6 +50,8 @@ class LightCurve:
         self.band = band
         if data is None:
             self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
+        elif type(data)==str:
+            self.data = pd.read_csv(data)
         else:
             self.data = data
         self.model = model
