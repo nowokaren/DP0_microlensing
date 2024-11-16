@@ -20,6 +20,8 @@ from exposures import Calexp
 from scipy.spatial import KDTree
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm
+from matplotlib.colors import Normalize
 from astropy.coordinates import SkyCoord
 from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
 from shapely.geometry import Polygon
@@ -185,6 +187,7 @@ class Run:
     def sky_map(self, color='red', lwT=1, lwC=1, calexps=True):
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
+        inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
         pixelization = HtmPixelization(self.htm_level)
         htm_triangle = pixelization.triangle(self.htm_id)
         tri_ra_dec = []
@@ -201,25 +204,31 @@ class Run:
             for dataRef in tqdm(self.calexp_data_ref, desc="Loading calexps"):
                 data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
                 calexp = Calexp(data_id)
-                ra_corners, dec_corners = calexp.get_corners()  # Suponiendo que se tiene esta función para obtener las esquinas
+                ra_corners, dec_corners = calexp.get_corners() 
                 polygon = Polygon(zip(ra_corners, dec_corners))
                 x_poly, y_poly = polygon.exterior.xy
                 if ok:
-                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05, label="calexp")
-                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC) 
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05, label="calexp", zorder=1)
+                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC, zorder=1) 
                     ok = False
                 else:
-                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05)  
-                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC)  # Contorno con alpha más alto
-    
-        # Aquí asegúrate de que los puntos y el triángulo se grafiquen después
-        ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  # Puntos encima de calexps
-        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--")  # Triángulo encima de calexps
-    
+                    ax.fill(x_poly, y_poly, color='gray', alpha=0.05, zorder=1)  
+                    ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC, zorder=1)  
+        
+        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--", zorder=2)  
+
+                # ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  
+        cmap = cm.Blues  
+        norm = Normalize(vmin=min(inj_points), vmax=max(inj_points)) 
+        colors = cmap(norm(inj_points)) 
+        scatter = ax.scatter(ra_vals, dec_vals, color=colors, label=f"Injected points", edgecolor='k', zorder=3)
+        cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+        cbar.set_label('Injected Points Intensity')
+        
         ax.set_xlabel("ra (deg)")
         ax.set_ylabel("dec (deg)")
         ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
-        plt.legend(loc=(1.01,0))
+        plt.legend(loc=(1.06,0))
         plt.grid(True)
         plt.savefig(self.main_path+"sky_map.png")
         plt.show()
@@ -272,8 +281,8 @@ class Run:
             df = self.log
         
         times = df["time"]
-        task_names = df["task"][2:]
-        details = df["detail"][2:]
+        task_names = df["task"][1:]
+        details = df["detail"][1:]
         duration = [j - i for i, j in zip(times[:-1], times[1:])][1:]
         unique_tasks = sorted(set(task_names))
         # cmap = plt.get_cmap("tab20")
@@ -289,7 +298,7 @@ class Run:
         bars = plt.bar(x_positions, duration, color=task_colors, width=bar_width)
         
         for i, (bar, detail, task) in enumerate(zip(bars, details, task_names)):
-            if str(detail) != "nan" and task!= "Finding points":  
+            if str(detail) != "nan" and detail is not None and task!= "Finding points":  
                 plt.text(bar.get_x() + bar.get_width() * 0.5, bar.get_height() * 1.03, 
                          f'{int(detail)}', ha='center', va='center', fontsize=10, color='black')
         
