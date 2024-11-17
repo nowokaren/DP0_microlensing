@@ -72,7 +72,8 @@ class LightCurve:
         circle = pixelization.triangle(htm_id).getBoundingCircle()
         scale = circle.getOpeningAngle().asDegrees()*3600
         level = pixelization.getLevel()
-        print(f'(ra,dec) = ({self.ra}, {self.dec})/nHTM_ID = {htm_id} - HTM_level={level} (bounded by a circle of radius ~{scale:0.2f} arcsec.)')
+        print(f'(ra,dec) = ({self.ra}, {self.dec})')
+        print(f'HTM_ID = {htm_id} - HTM_level={level} (bounded by a circle of radius ~{scale:0.2f} arcsec.)')
         self.htm_id = htm_id
         self.htm_level = level
         return htm_id

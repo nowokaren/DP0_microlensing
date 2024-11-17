@@ -217,7 +217,7 @@ class Run:
         
         ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--", zorder=2)  
 
-                # ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  
+        # ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  
         cmap = cm.Blues  
         norm = Normalize(vmin=min(inj_points), vmax=max(inj_points)) 
         colors = cmap(norm(inj_points)) 
