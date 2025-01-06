@@ -25,6 +25,8 @@ from matplotlib.colors import Normalize
 from astropy.coordinates import SkyCoord
 from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
 from shapely.geometry import Polygon
+
+from tools import random_point_in_triangle
                 
 
 class Run:
@@ -40,11 +42,14 @@ class Run:
         self.mjds = None
         self.htm_level = htm_level
         self.htm_id = None
+        self.htm_vertex = None
         self.inject_table = None
         # self.schema = self.create_schema()
         # self.tab = afwTable.SourceTable.make(self.schema)
         # self.visits = None
         # self.detectors = None
+
+
 
     def log_task(self, name, det=None):
         self.log["time"].append(time.time())
@@ -59,14 +64,15 @@ class Run:
         
     def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=0.5, plot=False):
         if not ra and not dec:
-            if len(self.inj_lc) == 0:
-                ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
-                dec = random.uniform(dp0_limits[1][0], dp0_limits[1][1])
-            else:
-                first_lc = self.inj_lc[0]
-                f_ra = first_lc.ra; f_dec = first_lc.dec
-                ra = random.uniform(f_ra-dist, f_ra+dist)
-                dec = random.uniform(f_dec-dist, f_dec+dist)
+            # if len(self.inj_lc) == 0:
+            #     ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
+            #     dec = random.uniform(dp0_limits[1][0], dp0_limits[1][1])
+            # else:
+            #     first_lc = self.inj_lc[0]
+            #     f_ra = first_lc.ra; f_dec = first_lc.dec
+            #     ra = random.uniform(f_ra-dist, f_ra+dist)
+            #     dec = random.uniform(f_dec-dist, f_dec+dist)
+            ra, dec = random_point_in_triangle(self.htm_vertex)
         lc = LightCurve(ra, dec)
         if len(self.inj_lc) == 0:
             lc.collect_calexp(self.htm_level)
@@ -74,6 +80,14 @@ class Run:
             self.mjds = lc.data["mjd"]
             self.calexp_dataIds =  [{"visit": dataref.dataId["visit"], "detector":dataref.dataId["detector"]} for dataref in self.calexp_data_ref]
             self.htm_id = lc.htm_id
+            pixelization = HtmPixelization(self.htm_level)
+            htm_triangle = pixelization.triangle(self.htm_id)
+            tri_ra_dec = []
+            for vertex in htm_triangle.getVertices():
+                lon = LonLat.longitudeOf(vertex).asDegrees()
+                lat = LonLat.latitudeOf(vertex).asDegrees()
+                tri_ra_dec.append((lon, lat))
+            self.htm_vertex = tri_ra_dec
         else:
             lc.data["mjd"] = self.mjds
             lc.data["visit"] = self.inj_lc[0].data["visit"]
@@ -188,14 +202,7 @@ class Run:
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
-        pixelization = HtmPixelization(self.htm_level)
-        htm_triangle = pixelization.triangle(self.htm_id)
-        tri_ra_dec = []
-        for vertex in htm_triangle.getVertices():
-            lon = LonLat.longitudeOf(vertex).asDegrees()
-            lat = LonLat.latitudeOf(vertex).asDegrees()
-            tri_ra_dec.append((lon, lat))
-        htm_polygon = Polygon(tri_ra_dec)
+        htm_polygon = Polygon(self.htm_vertex)
         x, y = htm_polygon.exterior.xy
         fig, ax = plt.subplots(figsize=(8, 6))
     
@@ -423,4 +430,5 @@ class Run:
     #     else:
     #         print(f"Task '{name}' isn't configured or it hasn't 'run' method.")
     #     return None
+
 
