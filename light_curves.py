@@ -23,6 +23,8 @@ import lsst.afw.display as afwDisplay
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 import lsst.sphgeom
+from lsst.sphgeom import Region
+from lsst.geom import SpherePoint, Angle, degrees
 
 from lsst.source.injection import ingest_injection_catalog, generate_injection_catalog
 from lsst.source.injection import VisitInjectConfig, VisitInjectTask
@@ -47,6 +49,7 @@ class LightCurve:
         self.dec = dec
         self.htm_id = None
         self.htm_level = None
+        self.radius = None
         self.band = band
         if data is None:
             self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
@@ -77,10 +80,20 @@ class LightCurve:
         self.htm_level = level
         return htm_id
 
-    def collect_calexp(self, level=20):
-        if not isinstance(self.htm_id, int):
-            self.calculate_htm_id(level)
-        datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+    def collect_calexp(self, query_calexps="htm", radius = 0.001, level=20):
+        if query_calexps == "htm":
+            if not isinstance(self.htm_id, int):
+                self.calculate_htm_id(level)
+            datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        elif query_calexps == "overlap": 
+            target_point = SpherePoint(Angle(self.ra, degrees), Angle(self.dec, degrees))
+            RA = target_point.getLongitude().asDegrees()
+            DEC = target_point.getLatitude().asDegrees()
+            circle = Region.from_ivoa_pos(f"CIRCLE {RA} {DEC} {radius}")            
+            datasetRefs = butler.query_datasets("calexp", where="visit_detector_region.region OVERLAPS my_region AND band = 'i'",
+                                    bind={"ra": RA, "dec": DEC, "my_region": circle})
+            # datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS buffer(POINT(ra, dec), r) AND band = '{self.band}'",
+            #                             bind={ "ra": target_point.getLongitude().asDegrees(), "dec": target_point.getLatitude().asDegrees(), "circle": self.radius})
         # datasetRefs = list(butler.registry.queryDatasets("calexp", where=f"band = '{self.band}' AND scisql_nano.OVERLAPS(coord, {self.htm_id})"))
         print(f"Found {len(datasetRefs)} calexps")
         ccd_visit = butler.get('ccdVisitTable')
@@ -109,6 +122,18 @@ class LightCurve:
         new_data_filtered = new_data_filtered.dropna(how="all", axis=0)  
         if not new_data.empty:
             self.data = pd.concat([self.data, new_data_filtered], ignore_index=True)
+        # First, ensure consistent dtypes between the dataframes
+        # if not new_data.empty:
+        #     # Get common columns that actually exist in both dataframes
+        #     common_columns = [col for col in new_data.columns.intersection(self.data.columns) 
+        #                      if col in new_data.columns and col in self.data.columns]
+        #     new_data_filtered = new_data.dropna(how="all", axis=1)
+        #     new_data_filtered = new_data_filtered.dropna(how="all", axis=0)
+        #     for col in common_columns:
+        #         if col in new_data_filtered and col in self.data:
+        #             new_data_filtered[col] = new_data_filtered[col].astype(self.data[col].dtype)
+            
+        #     self.data = pd.concat([self.data, new_data_filtered], ignore_index=True)
         self.calexp_data_ref = datasetRefs
         self.calexp_dataIds = [{"visit": dataid.dataId["visit"], "detector": dataid.dataId["detector"]} for dataid in datasetRefs]
 

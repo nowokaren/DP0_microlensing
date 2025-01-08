@@ -24,13 +24,13 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from astropy.coordinates import SkyCoord
 from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 
-from tools import random_point_in_triangle
+from tools import tri_sample, triangle_min_height, circ_sample
                 
 
 class Run:
-    def __init__(self, name=None, main_path = "runs/", htm_level=20):#, schema=None):
+    def __init__(self, name=None, main_path = "runs/", query_calexps = "htm", htm_level=20, radius=0.01):#, schema=None):
         date = datetime.now()
         self.name = name if name else date.strftime("%Y%m%d_%H%M%S")
         self.main_path = main_path + self.name + "/"
@@ -40,15 +40,25 @@ class Run:
         self.log = {"task":["Start"], "time":[time.time()], "detail":[None]}
         self.calexp_data_ref = None
         self.mjds = None
-        self.htm_level = htm_level
-        self.htm_id = None
-        self.htm_vertex = None
+        self.query_calexps = query_calexps
+        if self.query_calexps == "htm":
+            self.htm_level = htm_level
+            self.htm_id = None
+            self.htm_vertex = None
+        elif self.query_calexps == "overlap":
+            self.radius = radius
+        self.dist = None
+        self.ref_dist = None
         self.inject_table = None
         # self.schema = self.create_schema()
         # self.tab = afwTable.SourceTable.make(self.schema)
         # self.visits = None
         # self.detectors = None
-
+        
+    @property
+    def center(self):
+        lc = self.inj_lc[0]
+        return lc.ra, lc.dec
 
 
     def log_task(self, name, det=None):
@@ -62,7 +72,7 @@ class Run:
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
         
-    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=0.5, plot=False):
+    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=None, plot=False):
         if not ra and not dec:
             # if len(self.inj_lc) == 0:
             #     ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
@@ -72,22 +82,44 @@ class Run:
             #     f_ra = first_lc.ra; f_dec = first_lc.dec
             #     ra = random.uniform(f_ra-dist, f_ra+dist)
             #     dec = random.uniform(f_dec-dist, f_dec+dist)
-            ra, dec = random_point_in_triangle(self.htm_vertex)
+            if self.dist == None:
+                self.dist = dist
+            if self.query_calexps == "htm":
+                self.ref_dist = triangle_min_height(self.htm_vertex)
+            elif self.query_calexps == "overlap":
+                self.ref_dist = self.radius
+            while self.ref_dist/2<self.dist:
+                self.dist=float(input(f"Warning: forced distance ({self.dist}) is too large for the order of magnitude of the region {self.ref_dist}. Select other forced distance:/n Suggested: {max(self.ref_dist/20, 0.0001)}   "))
+            distance = self.dist/2
+            while distance < self.dist:    
+                if self.query_calexps == "htm": 
+                    ra, dec = tri_sample(self.htm_vertex)
+                elif self.query_calexps == "overlap":
+                    ra, dec = circ_sample(*self.center, self.radius)
+                for lc in self.inj_lc:
+                    distance = np.sqrt((lc.ra-ra)**2+(lc.dec-dec)**2)
+                    if distance < self.dist:
+                        break
+
         lc = LightCurve(ra, dec)
         if len(self.inj_lc) == 0:
-            lc.collect_calexp(self.htm_level)
+            if self.query_calexps=="htm":
+                lc.collect_calexp(query_calexps=self.query_calexps, level = self.htm_level)
+            elif self.query_calexps=="overlap":
+                lc.collect_calexp(query_calexps=self.query_calexps, radius = self.radius)
             self.calexp_data_ref = lc.calexp_data_ref
             self.mjds = lc.data["mjd"]
             self.calexp_dataIds =  [{"visit": dataref.dataId["visit"], "detector":dataref.dataId["detector"]} for dataref in self.calexp_data_ref]
-            self.htm_id = lc.htm_id
-            pixelization = HtmPixelization(self.htm_level)
-            htm_triangle = pixelization.triangle(self.htm_id)
-            tri_ra_dec = []
-            for vertex in htm_triangle.getVertices():
-                lon = LonLat.longitudeOf(vertex).asDegrees()
-                lat = LonLat.latitudeOf(vertex).asDegrees()
-                tri_ra_dec.append((lon, lat))
-            self.htm_vertex = tri_ra_dec
+            if self.query_calexps == "htm":
+                self.htm_id = lc.htm_id
+                pixelization = HtmPixelization(self.htm_level)
+                htm_triangle = pixelization.triangle(self.htm_id)
+                tri_ra_dec = []
+                for vertex in htm_triangle.getVertices():
+                    lon = LonLat.longitudeOf(vertex).asDegrees()
+                    lat = LonLat.latitudeOf(vertex).asDegrees()
+                    tri_ra_dec.append((lon, lat))
+                self.htm_vertex = tri_ra_dec
         else:
             lc.data["mjd"] = self.mjds
             lc.data["visit"] = self.inj_lc[0].data["visit"]
@@ -170,40 +202,51 @@ class Run:
 
     def find_flux(self, sources, inj_lc, save=None, search_factor=1):
         fluxes = []; fluxes_err = []
-        for i, lc in enumerate(self.inj_lc):
-            if i in inj_lc:
-                print(f'Searching in lc {i}')
-                # ra,dec = [lc.ra*np.pi/180, lc.dec*np.pi/180]
-                
-                # target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
-                # source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
-                # distances = source_coords.separation(target_coord)
-                # closest_index = np.argmin(distances)
-                # point = sources[closest_index]
-                dif_ra = abs(sources["coord_ra"]-lc.ra*np.pi/180)
-                dif_dec = abs(sources["coord_dec"]-lc.dec*np.pi/180)
-                idx_ra = np.argmin(dif_ra);idx_dec = np.argmin(dif_dec)
-                if idx_ra != idx_dec:
-                    min_dif = [dif_ra[idx_ra], dif_dec[idx_dec]]
-                    idx = np.argmin(min_dif)
-                    if idx == 1:
-                        idx_ra = idx_dec
-                point = sources[idx_ra]
-                flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
-                fluxes.append(flux); fluxes_err.append(flux_err)
-                if save != None:
-                    lc.add_flux(flux, flux_err, save)
-                else:
-                    fluxes.append(np.nan); fluxes_err.append(np.nan)
-        self.log_task("Finding points", det = len(inj_lc))            
+        try:
+            for i, lc in enumerate(self.inj_lc):
+                if i in tqdm(inj_lc, desc="Searching flux in source table):
+                    # ra,dec = [lc.ra*np.pi/180, lc.dec*np.pi/180]
+                    
+                    # target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
+                    # source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
+                    # distances = source_coords.separation(target_coord)
+                    # closest_index = np.argmin(distances)
+                    # point = sources[closest_index]
+                    dif_ra = abs(sources["coord_ra"]-lc.ra*np.pi/180)
+                    dif_dec = abs(sources["coord_dec"]-lc.dec*np.pi/180)
+                    idx_ra = np.argmin(dif_ra);idx_dec = np.argmin(dif_dec)
+                    if idx_ra != idx_dec:
+                        min_dif = [dif_ra[idx_ra], dif_dec[idx_dec]]
+                        idx = np.argmin(min_dif)
+                        if idx == 1:
+                            idx_ra = idx_dec
+                    point = sources[idx_ra]
+                    flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
+                    fluxes.append(flux); fluxes_err.append(flux_err)
+                    if save != None:
+                        lc.add_flux(flux, flux_err, save)
+                    else:
+                        fluxes.append(np.nan); fluxes_err.append(np.nan)
+            self.log_task("Finding points", det = len(inj_lc)) 
+        except KeyboardInterrupt:
+            print(f'Searching in lc {i}')
         return fluxes, fluxes_err  
 
     def sky_map(self, color='red', lwT=1, lwC=1, calexps=True):
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
-        htm_polygon = Polygon(self.htm_vertex)
-        x, y = htm_polygon.exterior.xy
+        if self.query_calexps == "htm":
+            label = f"HTM level {self.htm_level}"
+            title = f"Injected sources distribution in the HTM triangle (Level {self.htm_level})"
+            region_polygon = Polygon(self.htm_vertex)
+        elif self.query_calexps == "overlap":
+            label = f"circle of radius {self.radius}"
+            title = f"Injected sources distribution in the circle of radius {self.radius}"
+            ra,dec = self.inj_lc[0].ra, self.inj_lc[0].dec 
+            center = Point(ra, dec)
+            region_polygon = center.buffer(self.radius) 
+        x, y = region_polygon.exterior.xy
         fig, ax = plt.subplots(figsize=(8, 6))
     
         if calexps:
@@ -222,7 +265,7 @@ class Run:
                     ax.fill(x_poly, y_poly, color='gray', alpha=0.05, zorder=1)  
                     ax.plot(x_poly, y_poly, color='gray', alpha=0.5, linewidth=lwC, zorder=1)  
         
-        ax.plot(x, y, color="r", linewidth=lwT, label=f"HTM level {self.htm_level}", linestyle="--", zorder=2)  
+        ax.plot(x, y, color="r", linewidth=lwT, label=label, linestyle="--", zorder=2)  
 
                 # ax.scatter(ra_vals, dec_vals, color='blue', label=f"Injected points")  
         cmap = cm.Blues  
@@ -234,7 +277,7 @@ class Run:
         
         ax.set_xlabel("ra (deg)")
         ax.set_ylabel("dec (deg)")
-        ax.set_title(f"Injected sources distribution on the HTM triangle (Level {self.htm_level})")
+        ax.set_title(title)
         plt.legend(loc=(1.06,0))
         plt.grid(True)
         plt.savefig(self.main_path+"sky_map.png")
