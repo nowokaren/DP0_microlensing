@@ -34,8 +34,7 @@ from lsst.pipe.tasks.characterizeImage import CharacterizeImageTask
 
 from lsst.meas.algorithms.detection import SourceDetectionTask
 from lsst.meas.deblender import SourceDeblendTask
-from lsst.meas.base import SingleFrameMeasurementTask
-from lsst.meas.base import ForcedMeasurementTask
+from lsst.meas.base import SingleFrameMeasurementTask, ForcedMeasurementTask
 
 # butler_config = 'dp02'
 butler_config = 'dp02-direct'
@@ -90,7 +89,7 @@ class LightCurve:
             RA = target_point.getLongitude().asDegrees()
             DEC = target_point.getLatitude().asDegrees()
             circle = Region.from_ivoa_pos(f"CIRCLE {RA} {DEC} {radius}")            
-            datasetRefs = butler.query_datasets("calexp", where="visit_detector_region.region OVERLAPS my_region AND band = 'i'",
+            datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS my_region AND band = '{self.band}'",
                                     bind={"ra": RA, "dec": DEC, "my_region": circle})
             # datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS buffer(POINT(ra, dec), r) AND band = '{self.band}'",
             #                             bind={ "ra": target_point.getLongitude().asDegrees(), "dec": target_point.getLatitude().asDegrees(), "circle": self.radius})
@@ -195,13 +194,48 @@ class LightCurve:
             # print("Measured ", measure)
             # print("Injected ", lc.data["mag"][j])
 
-    def plot(self, title = None, sliced = "all"):
+    # def plot(self, title = None, sliced = "all", band = None, show = True):
+    #     if sliced == "all":
+    #         df = self.data
+    #     else:
+    #         df = self.data[sliced]
+    #     label_sim = "Simulated "
+    #     label_med = "Measured "
+    #     if band!= None:
+    #         label_sim +=band
+    #         label_med +=band
+    #     plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='gray', marker='o', linestyle='')
+    #     plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_med, color='red', linestyle='', marker='o', capsize=3)
+    #     plt.xlabel('MJD (Modified Julian Date)')
+    #     plt.ylabel('Magnitude')
+    #     if title is None:
+    #         title = str(self)
+    #     plt.title(title)
+    #     plt.gca().invert_yaxis()  
+    #     plt.legend()
+    #     if show:
+    #         plt.show()
+
+    def plot(self, title=None, sliced="all", band=None, show=True):
         if sliced == "all":
             df = self.data
         else:
             df = self.data[sliced]
-        plt.plot(df['mjd'], df['mag_sim'], label='Simulated', color='gray', marker='o', linestyle='')
-        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label='Magnitud Medida', color='red', linestyle='', marker='o', capsize=3)
+        
+        label_sim = "Simulated "
+        label_med = "Measured "
+        edge_color = "none"
+        if band is not None:
+            bands_colors = {'u': 'b', 'g': 'c', 'r': 'g', 'i': 'orange', 'z': 'r', 'y': 'm'}
+            if band in bands_colors:
+                edge_color = bands_colors[band]
+            label_sim += band
+            label_med += band
+
+        plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='gray', marker='o', edgecolor=edge_color, linestyle='')
+        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_med, color='red', edgecolor=edge_color, linestyle='', marker='o', capsize=3)
+
+
         plt.xlabel('MJD (Modified Julian Date)')
         plt.ylabel('Magnitude')
         if title is None:
@@ -209,7 +243,9 @@ class LightCurve:
         plt.title(title)
         plt.gca().invert_yaxis()  
         plt.legend()
-        plt.show()
+        if show:
+            plt.show()
+
 
     def save(self, path):
         self.data.to_csv(path, index=False)

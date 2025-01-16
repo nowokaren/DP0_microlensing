@@ -53,10 +53,17 @@ warnings.filterwarnings("ignore", message="Spacing is not a multiple of base spa
 class Calexp:
     def __init__(self, data_id):
         self.data_id = data_id
-        self.expF = butler.get('calexp', **data_id)
+        if type(data_id) != dict:
+            self.expF = data_id
+        else:
+            self.expF = butler.get('calexp', **data_id)
         self.wcs = self.expF.getWcs()
         self.cut = False
         self.warped  = False
+
+    @property
+    def center(self):
+        return self.wcs.getSkyOrigin()
 
     def pix_to_sky(self, x, y):
         """Convert pixel coordinates to RA and Dec."""

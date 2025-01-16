@@ -24,6 +24,7 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from astropy.coordinates import SkyCoord
 from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
+from lsst.geom import Angle, radians, degrees, SpherePoint
 from shapely.geometry import Polygon, Point
 
 from tools import tri_sample, triangle_min_height, circ_sample
@@ -60,7 +61,6 @@ class Run:
         lc = self.inj_lc[0]
         return lc.ra, lc.dec
 
-
     def log_task(self, name, det=None):
         self.log["time"].append(time.time())
         self.log["task"].append(name)
@@ -72,7 +72,7 @@ class Run:
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
         
-    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=None, plot=False):
+    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=None, band=None, plot=False):
         if not ra and not dec:
             # if len(self.inj_lc) == 0:
             #     ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
@@ -88,8 +88,9 @@ class Run:
                 self.ref_dist = triangle_min_height(self.htm_vertex)
             elif self.query_calexps == "overlap":
                 self.ref_dist = self.radius
-            while self.ref_dist/2<self.dist:
-                self.dist=float(input(f"Warning: forced distance ({self.dist}) is too large for the order of magnitude of the region {self.ref_dist}. Select other forced distance:/n Suggested: {max(self.ref_dist/20, 0.0001)}   "))
+            # while self.ref_dist/2<self.dist:
+            #     self.dist=float(input(f"Warning: forced distance ({self.dist}) is too large for the order of magnitude of the region {self.ref_dist}. Select other forced distance:/n Suggested: {max(self.ref_dist/20, 0.0001)}   "))
+            self.dist = self.ref_dist/20 
             distance = self.dist/2
             while distance < self.dist:    
                 if self.query_calexps == "htm": 
@@ -101,7 +102,7 @@ class Run:
                     if distance < self.dist:
                         break
 
-        lc = LightCurve(ra, dec)
+        lc = LightCurve(ra, dec, band = band)
         if len(self.inj_lc) == 0:
             if self.query_calexps=="htm":
                 lc.collect_calexp(query_calexps=self.query_calexps, level = self.htm_level)
@@ -203,25 +204,11 @@ class Run:
     def find_flux(self, sources, inj_lc, save=None, search_factor=1):
         fluxes = []; fluxes_err = []
         try:
-            for i, lc in enumerate(self.inj_lc):
-                if i in tqdm(inj_lc, desc="Searching flux in source table):
-                    # ra,dec = [lc.ra*np.pi/180, lc.dec*np.pi/180]
-                    
-                    # target_coord = SkyCoord(ra=lc.ra, dec=lc.dec, unit="deg")
-                    # source_coords = SkyCoord(ra=sources["coord_ra"], dec=sources["coord_dec"], unit="deg")
-                    # distances = source_coords.separation(target_coord)
-                    # closest_index = np.argmin(distances)
-                    # point = sources[closest_index]
-                    dif_ra = abs(sources["coord_ra"]-lc.ra*np.pi/180)
-                    dif_dec = abs(sources["coord_dec"]-lc.dec*np.pi/180)
-                    idx_ra = np.argmin(dif_ra);idx_dec = np.argmin(dif_dec)
-                    if idx_ra != idx_dec:
-                        min_dif = [dif_ra[idx_ra], dif_dec[idx_dec]]
-                        idx = np.argmin(min_dif)
-                        if idx == 1:
-                            idx_ra = idx_dec
-                    point = sources[idx_ra]
-                    flux = point["base_PsfFlux_instFlux"]; flux_err = point["base_PsfFlux_instFluxErr"]
+            for i, lc in enumerate(tqdm(self.inj_lc, desc="Searching flux in source table")):
+                if i in inj_lc:
+                    ra_rad = Angle(lc.ra, degrees).asRadians(); dec_rad = Angle(lc.ra, degrees).asRadians()
+                    near = np.argmin([SpherePoint(ra_rad,dec_rad, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))])
+                    flux = sources["base_PsfFlux_instFlux"][near]; flux_err = sources["base_PsfFlux_instFluxErr"][near]
                     fluxes.append(flux); fluxes_err.append(flux_err)
                     if save != None:
                         lc.add_flux(flux, flux_err, save)
@@ -232,7 +219,7 @@ class Run:
             print(f'Searching in lc {i}')
         return fluxes, fluxes_err  
 
-    def sky_map(self, color='red', lwT=1, lwC=1, calexps=True):
+    def sky_map(self, color='red', lwT=1, lwC=1, calexps=True, inj_points=True):
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
@@ -272,13 +259,14 @@ class Run:
         norm = Normalize(vmin=min(inj_points), vmax=max(inj_points)) 
         colors = cmap(norm(inj_points)) 
         scatter = ax.scatter(ra_vals, dec_vals, color=colors, label=f"Injected points", edgecolor='k', zorder=3)
-        cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
-        cbar.set_label('Injected Points Intensity')
+        if inj_points:
+            cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+            cbar.set_label('Injected Points Intensity')
         
         ax.set_xlabel("ra (deg)")
         ax.set_ylabel("dec (deg)")
         ax.set_title(title)
-        plt.legend(loc=(1.06,0))
+        plt.legend(loc=(1.06,1.06))
         plt.grid(True)
         plt.savefig(self.main_path+"sky_map.png")
         plt.show()
@@ -364,8 +352,10 @@ class Run:
         plt.show()
 
     def save_lc(self):
+        # for band in self.bands:
+        #     lcs = [lc for lc in self.inj_lc if lc.band == band]
         for i, lc in enumerate(self.inj_lc):
-            lc.save(self.main_path+f"lc_{i}.csv")
+            lc.save(self.main_path+f"lc_{i}_{lc.band}.csv")
 
     def save_time_log(self):
         pd.DataFrame(self.log).to_csv(self.main_path+'time_log.csv', index=False)
