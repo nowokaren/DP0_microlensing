@@ -106,8 +106,6 @@ class Calexp:
         """Check if a point is near the edge of the calexp."""
         x, y = self.sky_to_pix(ra, dec)
         bbox = self.expF.getBBox()
-    
-        # Comprobar si x o y están cerca de los bordes del bounding box
         return (
             abs(bbox.minX - x) < d or 
             abs(bbox.maxX - x) < d or 

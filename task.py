@@ -26,6 +26,8 @@ from astropy.coordinates import SkyCoord
 from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
 from lsst.geom import Angle, radians, degrees, SpherePoint
 from shapely.geometry import Polygon, Point
+from itertools import product
+from astropy.table import Table
 
 from tools import tri_sample, triangle_min_height, circ_sample
 
@@ -153,21 +155,42 @@ class Run:
         inject_config = VisitInjectConfig()
         self.tasks["Injection"] = VisitInjectTask(config=inject_config)
 
+    # def create_injection_table(self):
+    #     n_lc = len(self.inj_lc)
+    #     n_calexp = len(self.data_calexp)
+    #     ra = [lc.ra for lc in self.inj_lc]
+    #     dec = [lc.dec for lc in self.inj_lc]
+    #     star = ["Star" for lc in self.inj_lc]
+    #     mag_sim = [lc.data["mag_sim"] for lc in self.inj_lc]
+    #     data = []
+    #     for _ in [idx, visits, detector, ra, dec, star, mjd, mag_sim]:
+    #         data.append([_])
+    #     return Table(data, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
+    
     def create_injection_table(self):
-        idx = np.arange(len(self.inj_lc))
+        n_lc = len(self.inj_lc)
+        n_calexp = len(self.data_calexp)
+
         visits = self.data_calexp["visit"]
-        detector = self.data_calexp["detector"]
-        mjd = self.data_calexp["mjd"]
-        ra = [lc.ra for lc in self.inj_lc]
-        dec = [lc.dec for lc in self.inj_lc]
-        star = ["Star" for lc in self.inj_lc]
-        mag_sim = [lc.data["mag_sim"] for lc in self.inj_lc]
-        data = []
-        for _ in [idx, visits, detector, ra, dec, star, mjd, mag_sim]:
-            data.append([_])
-        return Table(data, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
+        detectors = self.data_calexp["detector"]
+        mjds = self.data_calexp["mjd"]
         
-    def inject_calexp(self, inject_table, calexp): #data, save_fit = None):
+        catalog = []
+        for (visit, detector, mjd), (lc) in product(zip(visits, detectors, mjds),self.inj_lc):
+            lc_calexp = lc.data[(lc.data["visit"] == visit) & (lc.data["detector"] == detector)]
+            catalog.append([visit, detector, lc.ra, lc.dec, "Star", mjd, lc_calexp["mag_sim"].values[0]])
+        
+        self.inject_table =  Table(rows=catalog,names=["visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
+    
+        # catalog = []
+        # for (visit, detector, mjd), (lc_ra, lc_dec, lc_star) in product(zip(visits, detectors, mjds),zip(ra, dec, star)):
+        #     lc_mag = [lc.data[lc.data["visit"]==visit and lc.data["visit"]==detector]["mag_sim"] for lc in self.inj_lc]
+        #     catalog.append([visit, detector, lc_ra, lc_dec, lc_star, mjd, lc_mag])
+    
+        #  Table(rows=catalog,names=["visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
+
+        
+    def inject_calexp(self, calexp): #data, save_fit = None):
         '''Creates injecting catalog and inject light curve's points if the calexp contains it.
         save_fit = name of the file to be saved'''
         # inj_lightcurves = []
@@ -187,17 +210,22 @@ class Run:
         # if len(inj_lightcurves)>0:
             # print(f"Points injected: {n_inj}")
             # print(inj_lightcurves)
+        inj_table_calexp = self.inject_table[(self.inject_table['visit'] == calexp.data_id["visit"]) & (self.inject_table['detector'] == calexp.data_id["detector"])]
         exposure = calexp.expF
-        injected_output = self.tasks["Injection"].run(
-            injection_catalogs=[inject_table],
-            input_exposure=exposure.clone(),
-            psf=exposure.getPsf(),
-            photo_calib=exposure.getPhotoCalib(),
-            wcs=calexp.wcs)
+        try:
+            injected_output = self.tasks["Injection"].run(
+                injection_catalogs=[inj_table_calexp],
+                input_exposure=exposure.clone(),
+                psf=exposure.getPsf(),
+                photo_calib=exposure.getPhotoCalib(),
+                wcs=calexp.wcs)
+        except:
+            print("No sources contained in this calexp.")
+            return None, None
         injected_exposure = injected_output.output_exposure
         injected_catalog = injected_output.output_catalog
-        self.log_task("Injection", det = n_inj)
-        return injected_output
+        self.log_task("Injection", det = len(inj_table_calexp))
+        return injected_exposure, injected_catalog
         #     if save_fit is not None:
         #         injected_exposure.writeFits(self.main_path+save_fit)
         #     if self.inject_table == None: 
@@ -236,26 +264,38 @@ class Run:
         self.log_task("Measurement")
         return sources
 
+    def check_injected_catalog(self, calexp, injected_catalog):
+        ra, dec = injected_catalog["ra"], injected_catalog["dec"]
+        mask_contain = np.array(calexp.contains(ra, dec))
+        if False in mask_contain:
+            print("Light curves NOT contained: ", [i for i in range(len(ra)) if not mask_contain[i]])
+        mask_edge = np.array([calexp.check_edge(r, d) for r, d in zip(ra, dec)])
+        if True in mask_edge:
+            print("Light curves near edge: ", [i for i in range(len(ra)) if mask_edge[i]])
+        keep_mask = mask_contain | ~mask_edge
+        filtered_catalog = injected_catalog[keep_mask]
+        return filtered_catalog
 
-    def find_flux(self, sources, inj_lc, save=None, search_factor=1):
+
+    def find_flux(self, sources, injected_catalog, save=None, search_factor=1):
         fluxes = []; fluxes_err = []
         try:
             for i, lc in enumerate(tqdm(self.inj_lc, desc="Searching flux in source table")):
-                if i in inj_lc:
+                if i in injected_catalog["injection_id"]:
                     ra_rad = Angle(lc.ra, degrees).asRadians(); dec_rad = Angle(lc.ra, degrees).asRadians()
-                    near = np.argmin([SpherePoint(ra_rad,dec_rad, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))])
+                    near = np.argmin([SpherePoint(lc.ra,lc.dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))])
                     flux = sources["base_PsfFlux_instFlux"][near]; flux_err = sources["base_PsfFlux_instFluxErr"][near]
                     fluxes.append(flux); fluxes_err.append(flux_err)
-                    if save != None:
-                        lc.add_flux(flux, flux_err, save)
-                    else:
-                        fluxes.append(np.nan); fluxes_err.append(np.nan)
-            self.log_task("Finding points", det = len(inj_lc)) 
+                    lc.add_flux(flux, flux_err, save=save)
+                else:
+                    fluxes.append(np.nan); fluxes_err.append(np.nan)
+                    lc.add_flux(np.nan, np.nan, save=save)
+            self.log_task("Finding points", det = len(injected_catalog)) 
         except KeyboardInterrupt:
             print(f'Searching in lc {i}')
         return fluxes, fluxes_err  
 
-    def sky_map(self, color='red', lwT=1, lwC=1, calexps=True, inj_points=True):
+    def sky_map(self, color='red', lwT=1, lwC=1, calexps=None, inj_points=True):
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
@@ -272,9 +312,13 @@ class Run:
         x, y = region_polygon.exterior.xy
         fig, ax = plt.subplots(figsize=(8, 6))
     
-        if calexps:
+        if calexps!=None:
+            if isinstance(calexp, float):
+                calexps = self.datasetRefs[:calexp]
+            else:
+                calexps = self.datasetRefs
             ok = True
-            for dataRef in tqdm(self.calexp_data_ref, desc="Loading calexps"):
+            for dataRef in tqdm(calexps, desc="Loading calexps"):
                 data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
                 calexp = Calexp(data_id)
                 ra_corners, dec_corners = calexp.get_corners() 
