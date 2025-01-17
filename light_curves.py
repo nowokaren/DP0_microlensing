@@ -36,6 +36,7 @@ from lsst.meas.algorithms.detection import SourceDetectionTask
 from lsst.meas.deblender import SourceDeblendTask
 from lsst.meas.base import SingleFrameMeasurementTask, ForcedMeasurementTask
 
+from lsst.daf.butler import Butler
 # butler_config = 'dp02'
 butler_config = 'dp02-direct'
 collections = '2.2i/runs/DP0.2'

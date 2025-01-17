@@ -28,34 +28,51 @@ from lsst.geom import Angle, radians, degrees, SpherePoint
 from shapely.geometry import Polygon, Point
 
 from tools import tri_sample, triangle_min_height, circ_sample
-                
+
+from lsst.daf.butler import Butler
+# butler_config = 'dp02'
+butler_config = 'dp02-direct'
+collections = '2.2i/runs/DP0.2'
+butler = Butler(butler_config, collections=collections)
 
 class Run:
-    def __init__(self, name=None, main_path = "runs/", query_calexps = "htm", htm_level=20, radius=0.01):#, schema=None):
+    def __init__(self, ra, dec, scale, band, name=None, main_path = "runs/", data_events = None, data_calexp = None, method = "htm"):
+        self.ra = ra; self.dec = dec
+        self.scale = scale # HTM level or radius in deg
+        self.method = method
+        self.band = band
+        self.inj_lc = []
         date = datetime.now()
         self.name = name if name else date.strftime("%Y%m%d_%H%M%S")
         self.main_path = main_path + self.name + "/"
         os.makedirs(self.main_path, exist_ok=True)
         self.tasks = {}
-        self.inj_lc = []
+        self.events = []
         self.log = {"task":["Start"], "time":[time.time()], "detail":[None]}
-        self.calexp_data_ref = None
-        self.mjds = None
-        self.query_calexps = query_calexps
-        if self.query_calexps == "htm":
-            self.htm_level = htm_level
-            self.htm_id = None
-            self.htm_vertex = None
-        elif self.query_calexps == "overlap":
-            self.radius = radius
+        if data_events is None:
+            self.data_events = pd.DataFrame(columns=["ra", "dec", "model", "params", "band", "points"]) 
+        elif type(data_events)==str:
+            self.data_events = pd.read_csv(data_events)
+        else:
+            self.data_events = data_events
+            
+        if data_calexp is None:
+            self.data_calexp = pd.DataFrame(columns=["detector", "visit", "mjd", "band"]) 
+        elif type(data_calexp)==str:
+            self.data_calexp = pd.read_csv(data_calexp)
+        else:
+            self.data_calexp = data_calexp
+        self.datasetRefs = None
         self.dist = None
         self.ref_dist = None
         self.inject_table = None
-        # self.schema = self.create_schema()
-        # self.tab = afwTable.SourceTable.make(self.schema)
-        # self.visits = None
-        # self.detectors = None
-        
+        if self.method == "htm":
+            self.htm_level = scale
+            self.htm_id = None
+            self.htm_vertex = None
+        elif self.method == "overlap":
+            self.radius = scale
+
     @property
     def center(self):
         lc = self.inj_lc[0]
@@ -71,108 +88,127 @@ class Run:
         schema.addField("coord_raErr", type="F", doc="Error in RA coordinate")
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
-        
-    def add_lc(self, params, model="Pacz",  ra=None, dec=None, dist=None, band=None, plot=False):
-        if not ra and not dec:
-            # if len(self.inj_lc) == 0:
-            #     ra = random.uniform(dp0_limits[0][0], dp0_limits[0][1])
-            #     dec = random.uniform(dp0_limits[1][0], dp0_limits[1][1])
-            # else:
-            #     first_lc = self.inj_lc[0]
-            #     f_ra = first_lc.ra; f_dec = first_lc.dec
-            #     ra = random.uniform(f_ra-dist, f_ra+dist)
-            #     dec = random.uniform(f_dec-dist, f_dec+dist)
-            if self.dist == None:
-                self.dist = dist
-            if self.query_calexps == "htm":
-                self.ref_dist = triangle_min_height(self.htm_vertex)
-            elif self.query_calexps == "overlap":
-                self.ref_dist = self.radius
-            # while self.ref_dist/2<self.dist:
-            #     self.dist=float(input(f"Warning: forced distance ({self.dist}) is too large for the order of magnitude of the region {self.ref_dist}. Select other forced distance:/n Suggested: {max(self.ref_dist/20, 0.0001)}   "))
-            self.dist = self.ref_dist/20 
-            distance = self.dist/2
-            while distance < self.dist:    
-                if self.query_calexps == "htm": 
-                    ra, dec = tri_sample(self.htm_vertex)
-                elif self.query_calexps == "overlap":
-                    ra, dec = circ_sample(*self.center, self.radius)
-                for lc in self.inj_lc:
-                    distance = np.sqrt((lc.ra-ra)**2+(lc.dec-dec)**2)
-                    if distance < self.dist:
-                        break
 
-        lc = LightCurve(ra, dec, band = band)
-        if len(self.inj_lc) == 0:
-            if self.query_calexps=="htm":
-                lc.collect_calexp(query_calexps=self.query_calexps, level = self.htm_level)
-            elif self.query_calexps=="overlap":
-                lc.collect_calexp(query_calexps=self.query_calexps, radius = self.radius)
-            self.calexp_data_ref = lc.calexp_data_ref
-            self.mjds = lc.data["mjd"]
-            self.calexp_dataIds =  [{"visit": dataref.dataId["visit"], "detector":dataref.dataId["detector"]} for dataref in self.calexp_data_ref]
-            if self.query_calexps == "htm":
-                self.htm_id = lc.htm_id
-                pixelization = HtmPixelization(self.htm_level)
-                htm_triangle = pixelization.triangle(self.htm_id)
-                tri_ra_dec = []
-                for vertex in htm_triangle.getVertices():
-                    lon = LonLat.longitudeOf(vertex).asDegrees()
-                    lat = LonLat.latitudeOf(vertex).asDegrees()
-                    tri_ra_dec.append((lon, lat))
-                self.htm_vertex = tri_ra_dec
+    def collect_calexp(self, method="htm"):
+        if method == "htm":
+            pixelization = HtmPixelization(self.scale)
+            self.htm_id = pixelization.index(UnitVector3d(LonLat.fromDegrees(self.ra, self.dec)))
+            circle = pixelization.triangle(self.htm_id).getBoundingCircle()
+            bound_circle_radius = circle.getOpeningAngle().asDegrees()*3600
+            level = pixelization.getLevel()
+            htm_triangle = pixelization.triangle(self.htm_id)
+            tri_ra_dec = []
+            for vertex in htm_triangle.getVertices():
+                lon = LonLat.longitudeOf(vertex).asDegrees()
+                lat = LonLat.latitudeOf(vertex).asDegrees()
+                tri_ra_dec.append((lon, lat))
+            self.htm_vertex = tri_ra_dec
+            print(f'(ra,dec) = ({self.ra}, {self.dec}) \nHTM_ID = {self.htm_id} - HTM_level={self.htm_level} (bounded by a circle of radius ~{bound_circle_radius:0.2f} arcsec.)')
+            self.datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
+        elif self.method == "overlap":
+            target_point = SpherePoint(Angle(self.ra, degrees), Angle(self.dec, degrees))
+            RA = target_point.getLongitude().asDegrees()
+            DEC = target_point.getLatitude().asDegrees()
+            circle = Region.from_ivoa_pos(f"CIRCLE {RA} {DEC} {self.scale}")
+            self.datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS my_region AND band = '{self.band}'", bind={"ra": RA, "dec": DEC, "my_region": circle})
+            print(f'(ra,dec) = ({self.ra}, {self.dec}) \nCircle of radius ~{self.scale:0.2f} deg.)')
+        print(f"Found {len(self.datasetRefs)} calexps.")
+        ccd_visit = butler.get('ccdVisitTable')
+        self.data_calexp["detector"] = [calexp_data.dataId['detector'] for calexp_data in self.datasetRefs]
+        self.data_calexp["visit"] = [calexp_data.dataId['visit'] for calexp_data in self.datasetRefs]
+        self.data_calexp["mjd"] = [ccd_visit[(ccd_visit['visitId'] == calexp_data.dataId['visit']) & (ccd_visit['detector'] == calexp_data.dataId['detector'])]['expMidptMJD'].values[0] for calexp_data in self.datasetRefs]
+
+    def generate_location(self, dist=None):
+        if dist is None:
+            if self.method == "htm":
+                self.ref_dist = triangle_min_height(self.htm_vertex)
+            elif self.method == "overlap":
+                self.ref_dist = self.radius
+            self.dist = self.ref_dist/20
         else:
-            lc.data["mjd"] = self.mjds
-            lc.data["visit"] = self.inj_lc[0].data["visit"]
-            lc.data["detector"] = self.inj_lc[0].data["detector"]
+            self.dist = dist
+        distance = self.dist/2
+        while distance < self.dist:
+            if self.method == "htm": 
+                ra, dec = tri_sample(self.htm_vertex)
+            elif self.method == "overlap":
+                ra, dec = circ_sample(*self.center, self.radius)
+            for lc in self.inj_lc:
+                distance = np.sqrt((lc.ra-ra)**2+(lc.dec-dec)**2)
+                if distance < self.dist:
+                    break
+        return ra, dec
+
+    def add_lc(self, ra, dec, params, band, model="Pacz", plot=False):
+        lc = LightCurve(ra, dec, band = band)
+        lc.data["mjd"] = self.data_calexp["mjd"]
+        lc.data["visit"] = self.data_calexp["visit"]
+        lc.data["detector"] = self.data_calexp["detector"]
         lc.simulate(params, model=model, plot=plot)
+        new_lc = {"ra": ra, "dec": dec, "model": model, "params": params, "band": band}
+        self.data_events.loc[len(self.data_events)] = new_lc
         self.inj_lc.append(lc)
 
     def inject_task(self):
         inject_config = VisitInjectConfig()
         self.tasks["Injection"] = VisitInjectTask(config=inject_config)
+
+    def create_injection_table(self):
+        idx = np.arange(len(self.inj_lc))
+        visits = self.data_calexp["visit"]
+        detector = self.data_calexp["detector"]
+        mjd = self.data_calexp["mjd"]
+        ra = [lc.ra for lc in self.inj_lc]
+        dec = [lc.dec for lc in self.inj_lc]
+        star = ["Star" for lc in self.inj_lc]
+        mag_sim = [lc.data["mag_sim"] for lc in self.inj_lc]
+        data = []
+        for _ in [idx, visits, detector, ra, dec, star, mjd, mag_sim]:
+            data.append([_])
+        return Table(data, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
         
-    def inject_calexp(self, calexp, save_fit = None):
+    def inject_calexp(self, inject_table, calexp): #data, save_fit = None):
         '''Creates injecting catalog and inject light curve's points if the calexp contains it.
         save_fit = name of the file to be saved'''
-        inj_lightcurves = []
-        for i, lc in enumerate(self.inj_lc):
-            if calexp.contains(lc.ra, lc.dec):
-                aux = []
-                data = [i, calexp.data_id["visit"], calexp.data_id["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag_sim"][i]]
-                for item in data:
-                    aux.append([item])
-                if len(inj_lightcurves) == 0:
-                    inject_table =  Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
-                else:
-                    inject_table = vstack([inject_table, Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])])
-                inj_lightcurves.append(i)
-        n_inj = len(inj_lightcurves)
-        if len(inj_lightcurves)>0:
-            print(f"Points injected: {n_inj}")
-            print(inj_lightcurves)
-            exposure = calexp.expF
-            injected_output = self.tasks["Injection"].run(
-                injection_catalogs=[inject_table],
-                input_exposure=exposure.clone(),
-                psf=exposure.getPsf(),
-                photo_calib=exposure.getPhotoCalib(),
-                wcs=calexp.wcs)
-            injected_exposure = injected_output.output_exposure
-            injected_catalog = injected_output.output_catalog
-            self.log_task("Injection", det = n_inj)
-
-            if save_fit is not None:
-                injected_exposure.writeFits(self.main_path+save_fit)
-            if self.inject_table == None: 
-                self.inject_table = injected_catalog
-            else:
-                self.inject_table = vstack([self.inject_table, injected_catalog])
-            return injected_exposure, inj_lightcurves
-            self.log_task("Saving injection results")
-        else:
-            print("No point is contained in the calexp")
-            return None, None
+        # inj_lightcurves = []
+        # for i, lc in enumerate(self.inj_lc):
+        #     if calexp.contains(lc.ra, lc.dec):
+        #         aux = []
+        #         data = [i, calexp.data_id["visit"], calexp.data_id["detector"], lc.ra, lc.dec,"Star", self.mjds[i], lc.data["mag_sim"][i]]
+        #         for item in data:
+        #             aux.append([item])
+        #         if len(inj_lightcurves) == 0:
+        #             inject_table =  Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
+        #         else:
+        #             inject_table = vstack([inject_table, Table(aux, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])])
+        #         inj_lightcurves.append(i)
+        
+        # n_inj = len(inj_lightcurves)
+        # if len(inj_lightcurves)>0:
+            # print(f"Points injected: {n_inj}")
+            # print(inj_lightcurves)
+        exposure = calexp.expF
+        injected_output = self.tasks["Injection"].run(
+            injection_catalogs=[inject_table],
+            input_exposure=exposure.clone(),
+            psf=exposure.getPsf(),
+            photo_calib=exposure.getPhotoCalib(),
+            wcs=calexp.wcs)
+        injected_exposure = injected_output.output_exposure
+        injected_catalog = injected_output.output_catalog
+        self.log_task("Injection", det = n_inj)
+        return injected_output
+        #     if save_fit is not None:
+        #         injected_exposure.writeFits(self.main_path+save_fit)
+        #     if self.inject_table == None: 
+        #         self.inject_table = injected_catalog
+        #     else:
+        #         self.inject_table = vstack([self.inject_table, injected_catalog])
+        #     return injected_exposure, inj_lightcurves
+        #     self.log_task("Saving injection results")
+        # else:
+        #     print("No point is contained in the calexp")
+            # return None, None
 
 
     def measure_task(self):
@@ -223,11 +259,11 @@ class Run:
         ra_vals = [lc.ra for lc in self.inj_lc]
         dec_vals = [lc.dec for lc in self.inj_lc]
         inj_points = [lc.data["mag"].count() for lc in self.inj_lc] 
-        if self.query_calexps == "htm":
+        if self.method == "htm":
             label = f"HTM level {self.htm_level}"
             title = f"Injected sources distribution in the HTM triangle (Level {self.htm_level})"
             region_polygon = Polygon(self.htm_vertex)
-        elif self.query_calexps == "overlap":
+        elif self.method == "overlap":
             label = f"circle of radius {self.radius}"
             title = f"Injected sources distribution in the circle of radius {self.radius}"
             ra,dec = self.inj_lc[0].ra, self.inj_lc[0].dec 
