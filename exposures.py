@@ -8,6 +8,7 @@ import astropy.units as u
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
+from regions import CircleSkyRegion, PolygonSkyRegion
 
 from matplotlib.patches import Circle
 import time
@@ -15,7 +16,7 @@ import gc
 import zipfile
 import sys
 
-from lsst.daf.butler import Butler
+from lsst.daf.butler import Butler, _dataset_ref
 from lsst.daf.butler.registry import ConflictingDefinitionError
 import lsst.daf.base as dafBase
 
@@ -23,6 +24,11 @@ import lsst.afw.display as afwDisplay
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 import lsst.sphgeom
+from shapely.geometry import Polygon, Point
+from astropy.coordinates import SkyCoord
+from spherical_geometry.polygon import SphericalPolygon
+
+import astropy.units as u
 
 from lsst.source.injection import ingest_injection_catalog, generate_injection_catalog
 from lsst.source.injection import VisitInjectConfig, VisitInjectTask
@@ -55,6 +61,9 @@ class Calexp:
         self.data_id = data_id
         if type(data_id) != dict:
             self.expF = data_id
+        elif type(data_id) == _dataset_ref.DatasetRef:
+            self.data_id = {'visit': dataRef.dataId['visit'], 'detector': dataRef.dataId['detector']}
+            self.expF = butler.get('calexp', **data_id)
         else:
             self.expF = butler.get('calexp', **data_id)
         self.wcs = self.expF.getWcs()
@@ -101,6 +110,21 @@ class Calexp:
             return polygon.contains(point)
         else:
             return [polygon.contains(Point(rai,deci)) for rai, deci in zip(ra,dec)]
+
+    def overlaps(self, region):
+        ra_corners, dec_corners = self.get_corners()
+        calexp_polygon = Polygon(zip(ra_corners, dec_corners))
+        if isinstance(region, CircleSkyRegion):
+            center = region.center
+            radius_deg = region.radius.to(u.deg).value  # Convert to degrees
+            circle = Point(center.ra.deg, center.dec.deg).buffer(radius_deg, resolution=50)
+            return calexp_polygon.intersects(circle)
+        
+        elif isinstance(region, Polygon):
+            return calexp_polygon.intersects(region)
+        else:
+            raise ValueError("Unsupported region type")
+
 
     def check_edge(self, ra, dec, d=50):
         """Check if a point is near the edge of the calexp."""
@@ -150,6 +174,12 @@ class Calexp:
         space = (abs(ra_corners[1]-ra_corners[0]))/(ticks+2)
         if roi is not None:
             space*=(roi[1]/min(self.expF.getDimensions()))
+        # ra_corners, _ = self.get_corners()
+        # space = max((abs(ra_corners[1] - ra_corners[0])) / (ticks + 2), 0.1)  # Minimum spacing of 0.1 degrees
+        # if roi is not None:
+        #     scale_factor = roi[1] / min(self.expF.getDimensions())
+        #     space = max(space * scale_factor, 0.1)  # Ensure spacing is at least 0.1 degrees
+
         ax.coords['ra'].set_ticks(spacing=space * u.deg)  
         ax.coords['dec'].set_ticks(spacing=space * u.deg)
 

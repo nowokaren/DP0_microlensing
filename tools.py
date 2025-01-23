@@ -54,19 +54,6 @@ def triangle_min_height(vertex):
     return min(h1, h2, h3)
 
 def circ_sample(x, y, radius, margin=0.05):
-    """
-    Returns a random (x, y) point within a circle of the given radius centered at (x, y).
-    If the point is near the edge of the circle, it will regenerate until it meets the margin criteria.
-
-    Parameters:
-    x (float): The x-coordinate of the circle's center.
-    y (float): The y-coordinate of the circle's center.
-    radius (float): The radius of the circle.
-    margin (float): The margin from the edge of the circle to consider as 'too close' (default is 5%).
-
-    Returns:
-    (float, float): A random (x, y) point within the circle.
-    """
     while True:
         angle = random.uniform(0, 2 * np.pi)
         r = random.uniform(0, radius)

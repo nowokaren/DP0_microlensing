@@ -43,13 +43,14 @@ collections = '2.2i/runs/DP0.2'
 butler = Butler(butler_config, collections=collections)
 
 class LightCurve:
-    def __init__ (self, ra=None, dec=None, band="i", data=None, name=None, model = None, params = None):
+    def __init__ (self, ra=None, dec=None, band="i", data=None, event_id=None, name=None, model = None, params = None):
         '''data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])'''
         self.ra = ra
         self.dec = dec
-        self.htm_id = None
-        self.htm_level = None
-        self.radius = None
+        self.event_id = event_id
+        # self.htm_id = None
+        # self.htm_level = None
+        # self.radius = None
         self.band = band
         if data is None:
             self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
@@ -173,27 +174,36 @@ class LightCurve:
             plt.title('Microlensing - Paczynski')
             plt.gca().invert_yaxis() 
             plt.show()
-        
 
-    def add_flux(self, flux, flux_err, dataId):
-        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"] = flux
-        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux_err"] = flux_err
+    def add_data(self, dataId, column, value):
+        if isinstance(column, str):
+            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), column] = value
+        if isinstance(column, list):
+            for col, val in zip(column, value):
+                self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), col] = val
+                
 
-
-
-    def add_mag(self, value, value_err, dataId, exposure = None):
+    def calc_mag(self, flux, flux_err, dataId = None, exposure = None):
         '''If exposure is given, then values are expected to be fluxes and needs to be transformed to magnitude.'''
+        if dataId != None:
+            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux"] = flux
+            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "flux_err"] = flux_err
         if exposure!=None:
             photoCalib = exposure.getPhotoCalib()
             measure = photoCalib.instFluxToMagnitude(value, value_err)
-            value = measure.value; value_err = measure.error
-        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag"] = value
-        self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag_err"] = value_err
+            mag = measure.value; mag_err = measure.error
+        else:
+            mag, mag_err = Calexp(dataId).get_mag(flux, flux_err)
+        if dataId != None:
+            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag"] = value
+            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), "mag_err"] = value_err
         if exposure!=None:
             return value, value_err
             # print(f"ra = {ra_deg}, dec = {dec_deg}")
             # print("Measured ", measure)
             # print("Injected ", lc.data["mag"][j])
+
+
 
     # def plot(self, title = None, sliced = "all", band = None, show = True):
     #     if sliced == "all":
