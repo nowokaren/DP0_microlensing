@@ -34,6 +34,7 @@ import astropy.units as u
 from regions import CircleSkyRegion, PolygonSkyRegion
 from itertools import product
 from astropy.table import Table
+from lsst.meas.base import ForcedMeasurementTask
 
 from tools import tri_sample, triangle_min_height, circ_sample
 from lsst.sphgeom import Region
@@ -88,10 +89,11 @@ butler = Butler(butler_config, collections=collections)
 
 
 class Run:
-    def __init__(self, ra, dec, scale, band, density=1000, name=None, main_path="runs/", data_events=None, data_calexp=None, method="htm"):
+    def __init__(self, ra, dec, scale, band, density=1000, name=None, main_path="runs/", data_events=None, data_calexp=None, method="htm", measure_method="ForcedMeas"):
         self.density = density  # Sources injected per deg²
         self.ra = ra ; self.dec = dec  # Center of the area to be injected
         self.method = method  # Method used to collect calexps
+        self.measure_method = measure_method
         self.band = band  # Band or filter to inject
         self.inj_lc = []  # List of LightCurves to be injected
         date = datetime.now()
@@ -237,17 +239,6 @@ class Run:
         inject_config = VisitInjectConfig()
         self.tasks["Injection"] = VisitInjectTask(config=inject_config)
 
-    # def create_injection_table(self):
-    #     n_lc = len(self.inj_lc)
-    #     n_calexp = len(self.data_calexp)
-    #     ra = [lc.ra for lc in self.inj_lc]
-    #     dec = [lc.dec for lc in self.inj_lc]
-    #     star = ["Star" for lc in self.inj_lc]
-    #     mag_sim = [lc.data["mag_sim"] for lc in self.inj_lc]
-    #     data = []
-    #     for _ in [idx, visits, detector, ra, dec, star, mjd, mag_sim]:
-    #         data.append([_])
-    #     return Table(data, names=['injection_id', 'visit', 'detector', 'ra', 'dec', 'source_type', 'exp_midpoint', 'mag'])
     
     def create_injection_table(self, calexp, band):
         catalog = []
@@ -307,63 +298,146 @@ class Run:
         injected_exposure.writeFits(self.main_path+"/"+save_fit)
         return injected_exposure, injected_catalog
 
+########### MEASUREMENT methods ################
+
     def measure_task(self):
         schema = afwTable.SourceTable.makeMinimalSchema()
-        raerr = schema.addField("coord_raErr", type="F")
-        decerr = schema.addField("coord_decErr", type="F")
-        algMetadata = dafBase.PropertyList()
-        config = SourceDetectionTask.ConfigClass()
-        config.thresholdValue = 4
-        config.thresholdType = "stdev"
-        self.tasks["Detection"] = SourceDetectionTask(schema=schema, config=config)
-        config = SingleFrameMeasurementTask.ConfigClass()
-        self.tasks["Measurement"] = SingleFrameMeasurementTask(schema=schema,
-                                                           config=config,
-                                                           algMetadata=algMetadata)
+        if self.measure_method == "SingleFrame":
+            raerr = schema.addField("coord_raErr", type="F")
+            decerr = schema.addField("coord_decErr", type="F")
+            algMetadata = dafBase.PropertyList()
+            config = SourceDetectionTask.ConfigClass()
+            config.thresholdValue = 5
+            config.thresholdType = "stdev"
+            self.tasks["Detection"] = SourceDetectionTask(schema=schema, config=config)
+            config = SingleFrameMeasurementTask.ConfigClass()
+            self.tasks["Measurement"] = SingleFrameMeasurementTask(schema=schema,
+                                                               config=config,
+                                                               algMetadata=algMetadata)
+
+        elif self.measure_method  == "ForcedMeas":
+            alias = schema.getAliasMap() 
+            x_key = schema.addField("centroid_x", type="D")
+            y_key = schema.addField("centroid_y", type="D")
+            alias.set("slot_Centroid", "centroid")
+            
+            xx_key = schema.addField("shape_xx", type="D")
+            yy_key = schema.addField("shape_yy", type="D")
+            xy_key = schema.addField("shape_xy", type="D")
+            alias.set("slot_Shape", "shape")
+            type_key = schema.addField("type_flag", type="F")
+            config = ForcedMeasurementTask.ConfigClass()
+            config.copyColumns = {}
+            config.plugins.names = [
+                "base_TransformedCentroid",
+                "base_PsfFlux",
+                "base_TransformedShape"
+            ]
+            config.doReplaceWithNoise = False
+            self.tasks["Measurement"]  = ForcedMeasurementTask(schema, config=config)
         return schema
 
-    def measure_calexp(self, calexp, schema):
-        tab = afwTable.SourceTable.make(schema)
-        result = self.tasks["Detection"].run(tab, calexp)
-        sources = result.sources
-        # sources = calexp.get_sources(self.tasks["Detection"], schema)
-        self.log_task("Detection", det=len(sources))
-        self.tasks["Measurement"].run(measCat=sources, exposure=calexp)
-        self.log_task("Measurement")
-        return sources
+    # def create_sources_table(self, pre_sources):
+    #     '''- self.measure_method  = "ForcedMeas" -> pre_sources = injected_catalog
+    #        - self.measure_method  = "SingleFrame" -> pre_sources = calexp"'''
+    #     if self.measure_method  == "ForcedMeas":
+    #         sources = afwTable.SourceCatalog(schema)
+    #         for source in pre_sources:
+    #             sourceRec = sources.addNew()
+    #             coord = geom.SpherePoint(geom.Angle(source["ra"], geom.degrees).asRadians(),geom.Angle(source["dec"], geom.degrees).asRadians(), geom.radians)
+    #             sourceRec.setCoord(coord)
+    #             sourceRec["centroid_x"], sourceRec["centroid_y"]= new_calexp.sky_to_pix(source["ra"], source["dec"])
+    #             sourceRec["type_flat"] = 0
+    #         self.log_task("Creating table to measure", det=len(sources))
+    #     elif self.measure_method == "SingleFrame":
+    #         tab = afwTable.SourceTable.make(schema)
+    #         result = self.tasks["Detection"].run(tab, pre_sources)
+    #         sources = result.sources
+    #         self.log_task("Detection", det=len(sources))
+    #     return sources
+            
+
+    # def measure_calexp(self, exposure, sources, schema):
+    #     if self.measure_method  == "SingleFrame":
+    #         self.tasks["Measurement"].run(measCat=sources, exposure=exposure)
+    #     elif self.measure_method  == "ForcedMeas":
+    #         forcedMeasCat = self.tasks["Measurement"].generateMeasCat(exposure, sources, exposure.getWcs())
+    #         self.tasks["Measurement"].run(forcedMeasCat, exposure, sources, exposure.getWcs())
+    #         sources = forcedMeasCat.asAstropy()            
+    #     self.log_task("Measurement", det = method)
+    #     return sources
 
 
-    def find_flux(self, sources, ra, dec, save=None):
-        distances = [SpherePoint(ra,dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))]
-        id_near = np.argmin(distances)
-        dist = distances[id_near]
-        if dist>Angle(1e-6, radians):
-            print(f"Source not found. Distance = {dist} ")
-            return None, None
-        return sources["base_PsfFlux_instFlux"][id_near], sources["base_PsfFlux_instFluxErr"][id_near]
+    # def find_flux(self, sources, ra, dec, save=None):
+    #     distances = [SpherePoint(ra,dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))]
+    #     id_near = np.argmin(distances)
+    #     dist = distances[id_near]
+    #     if dist>Angle(1e-6, radians):
+    #         print(f"Source not found. Distance = {dist} ")
+    #         return None, None
+    #     return sources["base_PsfFlux_instFlux"][id_near], sources["base_PsfFlux_instFluxErr"][id_near]
 
-    # def find_flux(self, sources, injected_catalog, save=None):
-    #     fluxes = []; fluxes_err = []
-    #     try:
-    #         for i, lc in enumerate(tqdm(self.data_events, desc="Searching flux in source table")):
-    #             if i in injected_catalog["injection_id"]:
-    #                 ra_rad = Angle(lc.ra, degrees).asRadians(); dec_rad = Angle(lc.ra, degrees).asRadians()
-    #                 near = np.argmin([SpherePoint(lc.ra,lc.dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))])
-    #                 flux = sources["base_PsfFlux_instFlux"][near]; flux_err = sources["base_PsfFlux_instFluxErr"][near]
-    #                 fluxes.append(flux); fluxes_err.append(flux_err)
-    #                 lc.add_flux(flux, flux_err,save)
-    #             else:
-    #                 fluxes.append(np.nan); fluxes_err.append(np.nan)
-    #                 lc.add_flux(np.nan, np.nan, save)
-    #         self.log_task("Finding points", det = len(injected_catalog)) 
-    #     except KeyboardInterrupt:
-    #         print(f'Searching in lc {i}')
-    #     return fluxes, fluxes_err  
+    # def get_fluxes(self, sources):
+    #     if self.measure_method == "SinlgeFrame":
+    #         return 
 
+
+    def measurement(self, schema, calexp, injected_catalog):
+        table = pd.DataFrame(columns=["ra", "dec", "flux", "flux_err", "mag", "mag_err", "flag"])
+        table["ra"] = injected_catalog["ra"]; table["dec"] = injected_catalog["dec"]
         
+        if self.measure_method  == "ForcedMeas":
+            sources = afwTable.SourceCatalog(schema)
+            for source in injected_catalog:
+                sourceRec = sources.addNew()
+                coord = SpherePoint(Angle(source["ra"], degrees).asRadians(),
+                                         Angle(source["dec"], degrees).asRadians(), radians)
+                sourceRec.setCoord(coord)
+                sourceRec["centroid_x"], sourceRec["centroid_y"]= calexp.sky_to_pix(source["ra"], source["dec"])
+                sourceRec["type_flag"] = 0
+            self.log_task("Creating table to measure", det=len(sources))
+            forcedMeasCat = self.tasks["Measurement"].generateMeasCat(calexp.expF, sources, calexp.wcs)
+            self.tasks["Measurement"].run(forcedMeasCat, calexp.expF, sources, calexp.wcs)
+            sources = forcedMeasCat.asAstropy()
+            for i, source in enumerate(sources):
+                ra, dec = calexp.pix_to_sky(source["slot_Centroid_x"],source["slot_Centroid_y"])
+                flux, flux_err = source["base_PsfFlux_instFlux"], source["base_PsfFlux_instFluxErr"]
+                mag, mag_err = calexp.get_mag(flux, flux_err)
+                table.loc[i, ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
+            self.log_task("Measurement", det = len(table))
+        elif self.measure_method == "SingleFrame":
+            tab = afwTable.SourceTable.make(schema)
+            # DETECTION
+            result = self.tasks["Detection"].run(tab, calexp.expF)
+            sources = result.sources
+            self.log_task("Detection", det=len(sources))
+            # MEASURE ALL DETECTED SOURCES
+            self.tasks["Measurement"].run(measCat=sources, exposure=calexp.expF)
+            self.log_task("Measurement", det =  len(sources))
+            # FIND INJECTED SOURCES IN MEASURED CATALOG
+            for source in injected_catalog:
+                flag = 0
+                ra, dec = source["ra"],source["dec"]
+                distances = [SpherePoint(ra, dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))]
+                id_near = np.argmin(distances)
+                dist = distances[id_near]
+                if dist>Angle(1e-6, radians):
+                    flag = dist
+                flux, flux_err = sources["base_PsfFlux_instFlux"][id_near], sources["base_PsfFlux_instFluxErr"][id_near]
+                mag, mag_err = calexp.get_mag(flux, flux_err)
+                table.loc[(table["ra"] == ra) & (table["dec"] == dec), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
+        return table
+
+
+
+
+
+
+
+    
 
     def sky_map(self, color='red', band=None, lwT=1, lwC=1, calexps=None, inj_points=True):
-        if band !=None:
+        if band ==None:
             inj_lc_list = self.inj_lc
         else:
             inj_lc_list = [lc for lc in self.inj_lc if lc.band==band]
@@ -385,12 +459,16 @@ class Run:
         fig, ax = plt.subplots(figsize=(8, 6))
     
         if calexps!=None:
-            if band!= None:
-                calexps_dataref = [dataRef for dataRef in self.datasetRefs if dataRef.dataId["band"]==band]
             if isinstance(calexps, int):
-                calexps_dataref = calexps_dataref[:calexps]
+                n_cal = calexps
+                calexps = self.datasetRefs[:n_cal]
+            else:
+                calexps = self.datasetRefs
+            
+            if band!= None:
+                calexps = [dataRef for dataRef in calexps if dataRef.dataId["band"]==band]
             ok = True
-            for dataRef in tqdm(calexps_dataref, desc="Loading calexps"):
+            for dataRef in tqdm(calexps, desc="Loading calexps"):
                 data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
                 calexp = Calexp(data_id)
                 ra_corners, dec_corners = calexp.get_corners() 
@@ -491,9 +569,11 @@ class Run:
         bars = plt.bar(x_positions, duration, color=task_colors, width=bar_width)
         
         for i, (bar, detail, task) in enumerate(zip(bars, details, task_names)):
-            if str(detail) != "nan" and detail is not None and task!= "Finding points":  
+            try:
                 plt.text(bar.get_x() + bar.get_width() * 0.5, bar.get_height() * 1.03, 
                          f'{int(detail)}', ha='center', va='center', fontsize=10, color='black')
+            except:
+                pass
         
         for task in unique_tasks:
             plt.bar(0, 0, color=col_task[task], label=task)
@@ -507,7 +587,7 @@ class Run:
         plt.show()
 
     def save_lc(self):
-        for band in self.bands:
+        for band in self.band:
             lcs = [lc for lc in self.inj_lc if lc.band == band]
             print(f"Saving {len(lcs)} light curves in band {band}")
             for lc in tqdm(lcs):

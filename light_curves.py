@@ -48,9 +48,6 @@ class LightCurve:
         self.ra = ra
         self.dec = dec
         self.event_id = event_id
-        # self.htm_id = None
-        # self.htm_level = None
-        # self.radius = None
         self.band = band
         if data is None:
             self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
