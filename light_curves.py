@@ -14,6 +14,8 @@ from matplotlib.patches import Circle
 import gc
 import zipfile
 import sys
+from io import StringIO
+
 
 from lsst.daf.butler import Butler
 from lsst.daf.butler.registry import ConflictingDefinitionError
@@ -43,97 +45,38 @@ collections = '2.2i/runs/DP0.2'
 butler = Butler(butler_config, collections=collections)
 
 class LightCurve:
-    def __init__ (self, ra=None, dec=None, band="i", data=None, event_id=None, name=None, model = None, params = None):
+    def __init__ (self, ra=None, dec=None, band=None, data=None, event_id=None, name=None, model = None, path = None, params = None):
         '''data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])'''
-        self.ra = ra
-        self.dec = dec
-        self.event_id = event_id
-        self.band = band
-        if data is None:
-            self.data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])
-        elif type(data)==str:
-            self.data = pd.read_csv(data)
+
+        if path:
+            self._load_from_file(path)
+            data = path 
+            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj"])
         else:
-            self.data = data
-        self.model = model
-        self.params = params
-        self.calexp_data_ref = None
-        self.calexp_dataIds = None
+            self.ra = ra
+            self.dec = dec
+            self.event_id = event_id
+            self.band = band
+            self.model = model
+            self.params = params
+            self.calexp_data_ref = None
+            self.calexp_dataIds = None
+            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj"])
+
 
     def __str__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Points: {len(self.data)}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)}")
     def __repr__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Points: {len(self.data)}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)}")
 
-    def calculate_htm_id(self, level=20):
-        pixelization = lsst.sphgeom.HtmPixelization(level)
-        htm_id = pixelization.index(
-            lsst.sphgeom.UnitVector3d(
-                lsst.sphgeom.LonLat.fromDegrees(self.ra, self.dec)))
-        circle = pixelization.triangle(htm_id).getBoundingCircle()
-        scale = circle.getOpeningAngle().asDegrees()*3600
-        level = pixelization.getLevel()
-        print(f'(ra,dec) = ({self.ra}, {self.dec})/nHTM_ID = {htm_id} - HTM_level={level} (bounded by a circle of radius ~{scale:0.2f} arcsec.)')
-        self.htm_id = htm_id
-        self.htm_level = level
-        return htm_id
-
-    def collect_calexp(self, query_calexps="htm", radius = 0.001, level=20):
-        if query_calexps == "htm":
-            if not isinstance(self.htm_id, int):
-                self.calculate_htm_id(level)
-            datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band = '{self.band}'"))
-        elif query_calexps == "overlap": 
-            target_point = SpherePoint(Angle(self.ra, degrees), Angle(self.dec, degrees))
-            RA = target_point.getLongitude().asDegrees()
-            DEC = target_point.getLatitude().asDegrees()
-            circle = Region.from_ivoa_pos(f"CIRCLE {RA} {DEC} {radius}")            
-            datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS my_region AND band = '{self.band}'",
-                                    bind={"ra": RA, "dec": DEC, "my_region": circle})
-            # datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS buffer(POINT(ra, dec), r) AND band = '{self.band}'",
-            #                             bind={ "ra": target_point.getLongitude().asDegrees(), "dec": target_point.getLatitude().asDegrees(), "circle": self.radius})
-        # datasetRefs = list(butler.registry.queryDatasets("calexp", where=f"band = '{self.band}' AND scisql_nano.OVERLAPS(coord, {self.htm_id})"))
-        print(f"Found {len(datasetRefs)} calexps")
-        ccd_visit = butler.get('ccdVisitTable')
-        mjds = []; detectors = [] ; visits = []; nans = []
-        for calexp_data in datasetRefs:
-            did = calexp_data.dataId
-            ccdrow = (ccd_visit['visitId'] == did['visit']) & (
-                ccd_visit['detector'] == did['detector'])
-            exp_midpoint = ccd_visit[ccdrow]['expMidptMJD'].values[0]
-            mjds.append(exp_midpoint)
-            detectors.append(did['detector'])  
-            visits.append(did['visit'])          
-            nans.append(np.nan)
-            
-        new_data = pd.DataFrame({
-            "detector": detectors,
-            "visit": visits,
-            "mjd": mjds,
-            "mag_sim": nans,
-            "flux": nans,
-            "flux_err": nans,
-            "mag": nans,
-            "mag_err": nans})
-
-        new_data_filtered = new_data.dropna(how="all", axis=1)  
-        new_data_filtered = new_data_filtered.dropna(how="all", axis=0)  
-        if not new_data.empty:
-            self.data = pd.concat([self.data, new_data_filtered], ignore_index=True)
-        # First, ensure consistent dtypes between the dataframes
-        # if not new_data.empty:
-        #     # Get common columns that actually exist in both dataframes
-        #     common_columns = [col for col in new_data.columns.intersection(self.data.columns) 
-        #                      if col in new_data.columns and col in self.data.columns]
-        #     new_data_filtered = new_data.dropna(how="all", axis=1)
-        #     new_data_filtered = new_data_filtered.dropna(how="all", axis=0)
-        #     for col in common_columns:
-        #         if col in new_data_filtered and col in self.data:
-        #             new_data_filtered[col] = new_data_filtered[col].astype(self.data[col].dtype)
-            
-        #     self.data = pd.concat([self.data, new_data_filtered], ignore_index=True)
-        self.calexp_data_ref = datasetRefs
-        self.calexp_dataIds = [{"visit": dataid.dataId["visit"], "detector": dataid.dataId["detector"]} for dataid in datasetRefs]
+    def _load_dataframe(self, data, columns):
+        if data is None:
+            self.data = pd.DataFrame(columns=columns)
+        elif isinstance(data, str): 
+            self.data = pd.read_csv(data, comment="#")
+            self.band = data.split(".")[-2][-1]
+        else:
+            self.data = data
 
     def simulate(self, params, model="Pacz", plot=False):
         """
@@ -155,7 +98,7 @@ class LightCurve:
                 A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
                 return m_base - 2.5 * np.log10(A_t)
             m_t = Pacz(self.data["mjd"], **params)
-            self.data["mag_sim"] = m_t
+            self.data["mag_inj"] = m_t
             self.name = "Simulated"
             self.model = "Pacz"
         else:
@@ -172,13 +115,9 @@ class LightCurve:
             plt.gca().invert_yaxis() 
             plt.show()
 
-    def add_data(self, dataId, column, value):
-        if isinstance(column, str):
-            self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), column] = value
-        if isinstance(column, list):
-            for col, val in zip(column, value):
-                self.data.loc[(self.data["visit"] == dataId["visit"]) & (self.data["detector"] == dataId["detector"]), col] = val
-                
+    def add_data(self, data_id, values, columns = ["flux", "flux_err", "mag", "mag_err"]):
+        '''columns = ["flux", "flux_err", "mag", "mag_err"]'''
+        self.data.loc[(self.data["visit"] == data_id["visit"]) &  (self.data["detector"] == data_id["detector"]), columns] = values        
 
     def calc_mag(self, flux, flux_err, dataId = None, exposure = None):
         '''If exposure is given, then values are expected to be fluxes and needs to be transformed to magnitude.'''
@@ -200,60 +139,76 @@ class LightCurve:
             # print("Measured ", measure)
             # print("Injected ", lc.data["mag"][j])
 
-
-
-    # def plot(self, title = None, sliced = "all", band = None, show = True):
-    #     if sliced == "all":
-    #         df = self.data
-    #     else:
-    #         df = self.data[sliced]
-    #     label_sim = "Simulated "
-    #     label_med = "Measured "
-    #     if band!= None:
-    #         label_sim +=band
-    #         label_med +=band
-    #     plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='gray', marker='o', linestyle='')
-    #     plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_med, color='red', linestyle='', marker='o', capsize=3)
-    #     plt.xlabel('MJD (Modified Julian Date)')
-    #     plt.ylabel('Magnitude')
-    #     if title is None:
-    #         title = str(self)
-    #     plt.title(title)
-    #     plt.gca().invert_yaxis()  
-    #     plt.legend()
-    #     if show:
-    #         plt.show()
-
-    def plot(self, title=None, sliced="all", band=None, show=True):
+    def plot(self, title=None, sliced="all", show=True, mag_lim=(31,14), simulated=True, figsize=(10,4)):
         if sliced == "all":
             df = self.data
         else:
             df = self.data[sliced]
-        
+        df = df.sort_values(by=['mjd'])
         label_sim = "Simulated "
-        label_med = "Measured "
+        label_mea = "Measured "
         edge_color = "none"
-        if band is not None:
+        if self.band is not None:
             bands_colors = {'u': 'b', 'g': 'c', 'r': 'g', 'i': 'orange', 'z': 'r', 'y': 'm'}
-            if band in bands_colors:
-                edge_color = bands_colors[band]
-            label_sim += band
-            label_med += band
+            if self.band in bands_colors:
+                edge_color = bands_colors[self.band]
+            label_sim += self.band
+            label_mea += self.band
 
-        plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='gray', marker='o', edgecolor=edge_color, linestyle='')
-        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_med, color='red', edgecolor=edge_color, linestyle='', marker='o', capsize=3)
-
-
-        plt.xlabel('MJD (Modified Julian Date)')
-        plt.ylabel('Magnitude')
+        # plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='none', marker='o', alpha=0.6, markeredgecolor=edge_color, linestyle='', markersize=4, mew=1)
+        if simulated:
+            if self.model == "Pacz":  # params = {t_0, t_E, u_0, m_base}
+            
+                def Pacz(t, t_0, t_E, u_0, m_base):
+                    u_t = np.sqrt(u_0**2 + ((t - t_0) / t_E)**2)
+                    A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
+                    return m_base - 2.5 * np.log10(A_t)
+            x = np.linspace(min(df['mjd']), max(df['mjd']), 500)
+            m_t = Pacz(x, **self.params)
+            plt.plot(x, m_t, color=edge_color,  alpha=0.4, linestyle='-', label=label_sim)
+        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_mea, color=edge_color, linestyle='', marker='o', capsize=4, markersize=5)
+        if figsize is not None:
+            plt.gcf().set_size_inches(*figsize) 
+        plt.gca().invert_yaxis()       
+        if mag_lim is not None:
+            plt.ylim(*mag_lim)          
+    
+        plt.xlabel('Epoch (MJD)')
+        plt.ylabel('mag')
+        plt.legend(loc=(1.02, 0.01)) 
+    
         if title is None:
             title = str(self)
         plt.title(title)
-        plt.gca().invert_yaxis()  
-        plt.legend()
+    
         if show:
             plt.show()
 
+    def _load_from_file(self, path):
+        with open(path, "r") as f:
+            metadata = {}
+            data_lines = []
+            for line in f:
+                if line.startswith("#"): 
+                    key, value = line[2:].strip().split(": ", 1)
+                    metadata[key] = value
+                else:
+                    data_lines.append(line)
 
+        self.ra = float(metadata.get("ra", "nan"))
+        self.dec = float(metadata.get("dec", "nan"))
+        self.event_id = path.split("/")[-1].split("_")[1]
+        self.band = metadata.get("band")
+        self.model = metadata.get("model")
+        self.params = metadata.get("params")
+        self.data = pd.read_csv(StringIO("".join(data_lines)))
+        
     def save(self, path):
-        self.data.to_csv(path, index=False)
+        with open(path, "w") as f:
+            f.write(f"# ra: {self.ra}\n")
+            f.write(f"# dec: {self.dec}\n")
+            f.write(f"# event_id: {self.event_id}\n")
+            f.write(f"# band: {self.band}\n")
+            f.write(f"# model: {self.model}\n")
+            f.write(f"# params: {self.params}\n")
+            self.data.to_csv(f, index=False)
