@@ -50,7 +50,8 @@ class LightCurve:
 
         if path:
             self._load_from_file(path)
-            data = path 
+            data = path
+            self.path = path
             self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj"])
         else:
             self.ra = ra
@@ -144,45 +145,52 @@ class LightCurve:
             df = self.data
         else:
             df = self.data[sliced]
-        df = df.sort_values(by=['mjd'])
-        label_sim = "Simulated "
-        label_mea = "Measured "
-        edge_color = "none"
-        if self.band is not None:
-            bands_colors = {'u': 'b', 'g': 'c', 'r': 'g', 'i': 'orange', 'z': 'r', 'y': 'm'}
-            if self.band in bands_colors:
-                edge_color = bands_colors[self.band]
-            label_sim += self.band
-            label_mea += self.band
-
-        # plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='none', marker='o', alpha=0.6, markeredgecolor=edge_color, linestyle='', markersize=4, mew=1)
-        if simulated:
-            if self.model == "Pacz":  # params = {t_0, t_E, u_0, m_base}
+        if len(df["mjd"].values)==0:
+            print(f"No points to plot for event {self.event_id} on band {self.band}.")
+        else:
+            df = df.sort_values(by=['mjd'])
+            label_sim = "Simulated "
+            label_mea = "Measured "
+            edge_color = "none"
+            if self.band is not None:
+                bands_colors = {'u': 'b', 'g': 'c', 'r': 'g', 'i': 'orange', 'z': 'r', 'y': 'm'}
+                if self.band in bands_colors:
+                    edge_color = bands_colors[self.band]
+                label_sim += self.band
+                label_mea += self.band
+    
+            # plt.plot(df['mjd'], df['mag_sim'], label=label_sim, color='none', marker='o', alpha=0.6, markeredgecolor=edge_color, linestyle='', markersize=4, mew=1)
+            if simulated:
+                if self.model == "Pacz":  # params = {t_0, t_E, u_0, m_base}
+                
+                    def Pacz(t, t_0, t_E, u_0, m_base):
+                        u_t = np.sqrt(u_0**2 + ((t - t_0) / t_E)**2)
+                        A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
+                        return m_base - 2.5 * np.log10(A_t)
+                x = np.linspace(min(df['mjd']), max(df['mjd']), 500)
+                m_t = Pacz(x, **self.params)
+                plt.plot(x, m_t, color=edge_color,  alpha=0.4, linestyle='-', label=label_sim)
+            plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_mea, color=edge_color, linestyle='', marker='o', capsize=4, markersize=5) 
             
-                def Pacz(t, t_0, t_E, u_0, m_base):
-                    u_t = np.sqrt(u_0**2 + ((t - t_0) / t_E)**2)
-                    A_t = (u_t**2 + 2) / (u_t * np.sqrt(u_t**2 + 4))
-                    return m_base - 2.5 * np.log10(A_t)
-            x = np.linspace(min(df['mjd']), max(df['mjd']), 500)
-            m_t = Pacz(x, **self.params)
-            plt.plot(x, m_t, color=edge_color,  alpha=0.4, linestyle='-', label=label_sim)
-        plt.errorbar(df['mjd'], df['mag'], yerr=df['mag_err'], label=label_mea, color=edge_color, linestyle='', marker='o', capsize=4, markersize=5)
-        if figsize is not None:
-            plt.gcf().set_size_inches(*figsize) 
-        plt.gca().invert_yaxis()       
-        if mag_lim is not None:
-            plt.ylim(*mag_lim)          
-    
-        plt.xlabel('Epoch (MJD)')
-        plt.ylabel('mag')
-        plt.legend(loc=(1.02, 0.01)) 
-    
-        if title is None:
-            title = str(self)
-        plt.title(title)
-    
-        if show:
-            plt.show()
+            if figsize is not None:
+                plt.gcf().set_size_inches(*figsize)
+            plt.gca().invert_yaxis() 
+            if mag_lim is not None:
+                plt.ylim(*mag_lim)
+            plt.gca().invert_yaxis() 
+            
+            
+            plt.xlabel('Epoch (MJD)')
+            plt.ylabel('mag')
+            plt.legend(loc=(1.02, 0.01)) 
+        
+            if title is None:
+                title = str(self)
+            plt.title(title)
+        
+            if show:
+                plt.show()
+
 
     def _load_from_file(self, path):
         with open(path, "r") as f:

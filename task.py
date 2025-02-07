@@ -5,6 +5,7 @@ from tqdm.notebook import tqdm
 import os
 from datetime import datetime
 import numpy as np
+from matplotlib.image import imread
 import pandas as pd
 from astropy.table import Table, vstack
 from lsst.afw import table as afwTable
@@ -48,68 +49,8 @@ butler = Butler(butler_config, collections=collections)
 
 
 class Run:
-#     def __init__(self, ra, dec, scale, bands, density=1000, name=None, main_path="runs/", data_events=None, data_calexp=None, calexp_method="htm", measure_method="ForcedMeas"):
-#         self.density = density                                                   # Sources injected per deg²
-#         self.ra = ra ; self.dec = dec                                            # Center of the area to be injected
-#         self.calexps_method = calexp_method                                      # Method used to collect calexps
-#         self.measure_method = measure_method
-#         self.bands = bands                                                       # Bands or filter to inject
-#         self.inj_lc = []                                                         # List of LightCurves to be injected
-#         date = datetime.now()
-#         self.name = name if name else date.strftime("%Y%m%d_%H%M%S")             # Name of the Run
-#         self.main_path = os.path.join(main_path, self.name)                      # Path to save the results
-#         os.makedirs(self.main_path, exist_ok=True)
-#         self.tasks = {}                                                          # Save tasks to use
-#         self.log = {"task": ["Start"], "time": [time.time()], "detail": [None]}  # Log of tasks and their time consumption
-        
-#         if data_events is None:                                                  # DataFrame with data of events to be injected
-#             self.data_events = pd.DataFrame(columns=["event_id", "ra", "dec", "model", "band", "points"])
-#         elif isinstance(data_events, str):
-#             self.data_events = pd.read_csv(data_events)
-#         else:
-#             self.data_events = data_events
-        
-#         if data_calexp is None:                                                   # DataFrame with data of calexps to be injected
-#             self.data_calexp = pd.DataFrame(columns=["detector", "visit", "mjd", "band", "overlap", "ids_events"])
-#         elif isinstance(data_calexp, str):
-#             self.data_calexp = pd.read_csv(data_calexp)
-#         else:
-#             self.data_calexp = data_calexp
-
-#         self.datasetRefs = None                                                   # Objects of DataRef of calexps to be injected
-#         self.dist = None                                                          # Minimum distance between injected sources
-#         self.ref_dist = None                                                      # Order of magnitude of the injected area
-#         self.inject_table = {band: None for band in self.bands}                   # Sources to be injected (input format of Injection Task)
-        
-#         if self.calexps_method == "htm":
-#             self.htm_level = scale  # Level of the HTM triangle to be injected
-#             pixelization = HtmPixelization(self.htm_level)
-#             self.htm_id = pixelization.index(UnitVector3d(LonLat.fromDegrees(self.ra, self.dec)))  # ID of the HTM triangle to be injected
-#             self.bound_circle_radius = pixelization.triangle(self.htm_id).getBoundingCircle().getOpeningAngle().asDegrees() * 3600
-#             htm_triangle = pixelization.triangle(self.htm_id)
-#             tri_ra_dec = []
-#             for vertex in htm_triangle.getVertices():
-#                 lon = LonLat.longitudeOf(vertex).asDegrees()
-#                 lat = LonLat.latitudeOf(vertex).asDegrees()
-#                 tri_ra_dec.append((lon, lat))
-#             self.htm_vertex = tri_ra_dec  # Vertices of the HTM triangle to be injected
-#             self.level_area = np.pi / (2 * 4**(self.htm_level - 1)) * (180 / np.pi)**2  # Area of the sky to be injected (deg²)
-#             ra_vertices, dec_vertices = zip(*tri_ra_dec)
-#             self.region = SphericalPolygon.from_lonlat(ra_vertices, dec_vertices, degrees=True)
-
-        
-#         elif self.calexps_method == "overlap":
-#             self.radius = scale  # Radius of the area to be injected
-#             center = SkyCoord(ra=self.ra, dec=self.dec, unit="deg", frame="icrs")
-#             self.region = CircleSkyRegion(center=center, radius=self.radius * u.deg)
-#             self.area =  np.pi * self.region.radius.to(u.deg).value ** 2  # Area in square degrees
-
-#         else:
-#             raise ValueError("Unknown method. Choose either 'htm' or 'overlap'.")
-#         self.n_lc = int(self.density * self.area) + 1  # Number of sources to be injected
-#         self.write_log()
-    def __init__(self, name=None, ra=None, dec=None, bands=None, calexps_method=None, 
-                 measure_method=None, density=None, area=None, radius=None, n_lc=None, 
+    def __init__(self, name=None, ra=None, dec=None, bands=None, calexps_method="overlap", 
+                 measure_method="ForcedMeas", density=None, area=None, radius=None, n_lc=0, 
                  main_path="./runs", data_events=None, data_calexp=None, scale=None):
 
         self.name = name if name else datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -171,12 +112,12 @@ class Run:
         self.htm_level = scale
         pixelization = HtmPixelization(self.htm_level)
         self.htm_id = pixelization.index(UnitVector3d(LonLat.fromDegrees(self.ra, self.dec)))
-        self.bound_circle_radius = pixelization.triangle(self.htm_id).getBoundingCircle().getOpeningAngle().asDegrees() * 3600
+        self.bound_circle_radius = pixelization.triangle(self.htm_id).getBoundingCircle().getOpeningAngle().asDegrees() 
         htm_triangle = pixelization.triangle(self.htm_id)
 
         tri_ra_dec = [(LonLat.longitudeOf(v).asDegrees(), LonLat.latitudeOf(v).asDegrees()) for v in htm_triangle.getVertices()]
         self.htm_vertex = tri_ra_dec
-        self.level_area = np.pi / (2 * 4**(self.htm_level - 1)) * (180 / np.pi)**2  # Area in deg²
+        self.area = np.pi / (2 * 4**(self.htm_level - 1)) * (180 / np.pi)**2  # Area in deg²
 
         ra_vertices, dec_vertices = zip(*tri_ra_dec)
         self.region = SphericalPolygon.from_lonlat(ra_vertices, dec_vertices, degrees=True)
@@ -250,7 +191,7 @@ class Run:
                 f"Measure Method: {self.measure_method}\n"
                 f"Density: {self.density} sources/deg²\n"
                 f"Area: {self.area:.3f} deg²\n"
-                f"Scale: {self.radius:.3f} deg\n"
+                f"Scale: {self.scale:.3f} \n"
                 f"Number of LightCurves to inject: {self.n_lc}\n"
                 f"Main Path: {self.main_path}\n"
                 f"{separator}")
@@ -266,7 +207,7 @@ class Run:
                 f"Measure Method: {self.measure_method}\n"
                 f"Density: {self.density} sources/deg²\n"
                 f"Area: {self.area:.3f} deg²\n"
-                f"Scale: {self.radius:.3f} deg\n"
+                f"Scale: {self.scale:.3f} \n"
                 f"Number of LightCurves to inject: {self.n_lc}\n"
                 f"Main Path: {self.main_path}\n"
                 f"{separator}")
@@ -286,34 +227,36 @@ class Run:
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
 
-    def collect_calexp(self, n_max=None):
+    def collect_calexp(self, n_max=None, load_mjd=True):
         bands_str = f"({', '.join(map(repr, self.bands))})"
         print("Collecting calexps...")
         if self.calexps_method == "htm":
-            print(f'(ra,dec) = ({self.ra}, {self.dec}) \nHTM_ID = {self.htm_id} - HTM_level={self.htm_level} (bounded by a circle of radius ~{bound_circle_radius:0.2f} arcsec.)')
+            print(f'(ra,dec) = ({self.ra}, {self.dec}) \nHTM_ID = {self.htm_id} - HTM_level={self.htm_level} (bounded by a circle of radius ~{self.bound_circle_radius*3600:0.2f} arcsec.)')
             self.datasetRefs = list(butler.registry.queryDatasets("calexp", htm20=self.htm_id, where=f"band IN {bands_str}"))
         elif self.calexps_method == "overlap":
             target_point = SpherePoint(Angle(self.ra, degrees), Angle(self.dec, degrees))
             RA = target_point.getLongitude().asDegrees()
             DEC = target_point.getLatitude().asDegrees()
             circle = Region.from_ivoa_pos(f"CIRCLE {RA} {DEC} {self.radius}")
-            self.datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS my_region AND band IN {bands_str}", bind={"ra": RA, "dec": DEC, "my_region": circle})
+            self.datasetRefs = butler.query_datasets("calexp", where=f"visit_detector_region.region OVERLAPS my_region AND band IN {bands_str}", 
+                                                     bind={"ra": RA, "dec": DEC, "my_region": circle}, limit=100000000)
             print(f'(ra,dec) = ({self.ra}, {self.dec}) \nCircle of radius ~{self.radius:0.3f} deg.')
 
-        if n_max is not None:
-            datasetRefs = self.datasetRefs[:n_max]
-        n_dataref = len(datasetRefs)
-        print(f"Found {n_dataref} calexps.")
-        ccd_visit = butler.get('ccdVisitTable')
-        self.data_calexp["detector"] = [calexp_data.dataId['detector'] for calexp_data in datasetRefs]
-        self.data_calexp["visit"] = [calexp_data.dataId['visit'] for calexp_data in datasetRefs]
-        self.data_calexp["mjd"] = [
-            ccd_visit[(ccd_visit['visitId'] == calexp_data.dataId['visit']) & 
-                      (ccd_visit['detector'] == calexp_data.dataId['detector'])]['expMidptMJD'].values[0]
-            for calexp_data in tqdm(datasetRefs, desc="Processing MJD values")
-        ]
-        self.data_calexp["band"] = [calexp_data.dataId['band'] for calexp_data in datasetRefs]
-        self.log_task("Collecting calexps", det=n_dataref)
+        if load_mjd:
+            if n_max is not None:
+                datasetRefs = self.datasetRefs[:n_max]
+            n_dataref = len(datasetRefs)
+            print(f"Found {n_dataref} calexps.")
+            ccd_visit = butler.get('ccdVisitTable')
+            self.data_calexp["detector"] = [calexp_data.dataId['detector'] for calexp_data in datasetRefs]
+            self.data_calexp["visit"] = [calexp_data.dataId['visit'] for calexp_data in datasetRefs]
+            self.data_calexp["mjd"] = [
+                ccd_visit[(ccd_visit['visitId'] == calexp_data.dataId['visit']) & 
+                          (ccd_visit['detector'] == calexp_data.dataId['detector'])]['expMidptMJD'].values[0]
+                for calexp_data in tqdm(datasetRefs, desc="Processing MJD values")
+            ]
+            self.data_calexp["band"] = [calexp_data.dataId['band'] for calexp_data in datasetRefs]
+            self.log_task("Collecting calexps", det=n_dataref)
 
     def generate_location(self, dist=None):
         if dist is None:
@@ -365,10 +308,13 @@ class Run:
         detector = calexp.data_id["detector"]
         mjd = self.data_calexp[(self.data_calexp["visit"] == visit) & (self.data_calexp["detector"] == detector)]["mjd"].values[0]
         for lc in self.inj_lc:
-            if lc.band == band:
-                lc_calexp = lc.data[(lc.data["visit"] == visit) & (lc.data["detector"] == detector)]
-                catalog.append([visit, detector, lc.ra, lc.dec, "Star", mjd, lc_calexp["mag_inj"].values[0]])    
-        return Table(rows=catalog,names=["visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
+            if (lc.band == band) and (calexp.contains(lc.ra, lc.dec)) and (~calexp.check_edge(lc.ra, lc.dec, d=100)):
+                mag_inj = lc.data[(lc.data["visit"] == visit) & (lc.data["detector"] == detector)]["mag_inj"].values[0]
+                catalog.append([visit, detector, lc.ra, lc.dec, "Star", mjd, mag_inj])
+        if len(catalog)==0:
+            return False
+        else:
+            return Table(rows=catalog,names=["visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
 
     def check_injection_catalog(self, calexp, catalog, before_injection = True):
         ra, dec = catalog["ra"], catalog["dec"]
@@ -391,11 +337,10 @@ class Run:
         data_id = calexp.data_id
         self.data_calexp.loc[(self.data_calexp["detector"] == data_id["detector"]) & (self.data_calexp["visit"] == data_id["visit"]), "ids_events"] = "-".join(map(str, self.data_events[self.data_events["ra"].isin(filtered_catalog["ra"].value)].index))
         return filtered_catalog
-            
-    def inject_calexp(self, calexp, inject_table, save_fit = None):
-        '''Creates injecting catalog and inject light curve's points if the calexp contains it.
-        save_fit = name of the file to be saved'''
 
+
+        
+    def inject_calexp(self, calexp, inject_table, save_fit = None):
         exposure = calexp.expF
         try:
             injected_output = self.tasks["Injection"].run(
@@ -408,7 +353,7 @@ class Run:
             print("Couldn't inject the injection_catalog")
             print("Error:", str(e))
             print("Detailed traceback:")
-            print(traceback.format_exc())  # This will print the full traceback
+            print(traceback.format_exc()) 
             return None, None
 
         injected_exposure = injected_output.output_exposure
@@ -522,7 +467,8 @@ class Run:
                 ra, dec = calexp.pix_to_sky(source["slot_Centroid_x"],source["slot_Centroid_y"])
                 flux, flux_err = source["base_PsfFlux_instFlux"], source["base_PsfFlux_instFluxErr"]
                 mag, mag_err = calexp.get_mag(flux, flux_err)
-                table.loc[i, ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
+                table.loc[np.isclose(table["ra"], ra,rtol=1e-5) & np.isclose(table["dec"], dec,rtol=1e-5), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
+                # table.loc[i, ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
             self.log_task("Measurement", det = len(table))
         elif self.measure_method == "SingleFrame":
             tab = afwTable.SourceTable.make(schema)
@@ -544,10 +490,12 @@ class Run:
                     flag = dist
                 flux, flux_err = sources["base_PsfFlux_instFlux"][id_near], sources["base_PsfFlux_instFluxErr"][id_near]
                 mag, mag_err = calexp.get_mag(flux, flux_err)
-                table.loc[(table["ra"] == ra) & (table["dec"] == dec), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
+                # table.loc[(table["ra"] == ra) & (table["dec"] == dec), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
+                table.loc[np.isclose(table["ra"], ra,rtol=1e-5) & np.isclose(table["dec"], dec,rtol=1e-5), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
         return table, sources
 
-    def sky_map(self, color='red', band=None, lwT=1, lwC=1, calexps=None, inj_points=True):
+
+    def sky_map(self, color='red', band=None, lwT=1, lwC=1, calexps=None, inj_points=True, show=True, ax=None):
         if band ==None:
             inj_lc_list = self.inj_lc
         else:
@@ -567,19 +515,21 @@ class Run:
         if band!= None:
             title += f" Band: {band}"
         x, y = region_polygon.exterior.xy
-        fig, ax = plt.subplots(figsize=(8, 6))
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 6))
     
-        if calexps!=None:
-            if isinstance(calexps, int):
+        if calexps is not None:
+            if isinstance(calexps, int) and not isinstance(calexps, bool):
                 n_cal = calexps
                 calexps = self.datasetRefs[:n_cal]
             else:
                 calexps = self.datasetRefs
-            
+            desc="Plotting calexps"
             if band!= None:
                 calexps = [dataRef for dataRef in calexps if dataRef.dataId["band"]==band]
+                desc+=f" for band: {band}"
             ok = True
-            for dataRef in tqdm(calexps, desc="Plotting calexps"):
+            for dataRef in tqdm(calexps, desc=desc):
                 data_id = {"visit":dataRef.dataId["visit"], "detector":dataRef.dataId["detector"]}
                 calexp = Calexp(data_id)
                 ra_corners, dec_corners = calexp.get_corners() 
@@ -607,15 +557,28 @@ class Run:
         
         ax.set_xlabel("ra (deg)")
         ax.set_ylabel("dec (deg)")
+        if calexps is not None:
+            title += f" n_calexps: {len(calexps)}"
         ax.set_title(title)
-        plt.legend(loc=(1.06,1.06))
+        plt.legend(loc="lower center", ncol=3, bbox_to_anchor=(0.5, -0.21))
         plt.grid(True)
         if band==None:
             plt.savefig(self.main_path+"/sky_map.png")
         else:
             plt.savefig(self.main_path+f"/sky_map_{band}.png")
-        plt.show()
+        
+
         self.log_task("Plotting sky map", det=band)
+        if calexps is not None:
+            result = len(calexps)
+        else:
+            result = None
+        if show:
+            plt.show()
+        else:
+            result = (result, ax)
+        return result
+        
 
     def time_analysis(self, path=None):
         if path != None:
@@ -701,14 +664,136 @@ def plot_event(path, events_id=None, model="Pacz", mag_lim=(30,14), figsize=(10,
                 show=True
             lc.plot(title = f"Event ID: {i}", mag_lim = mag_lim, figsize=figsize, show=show)
         show=False if join else True
-    # def characterize_task(self, psf_iter = 1): 
-    #     self.name = "Characterize"
-    #     config = CharacterizeImageTask.ConfigClass()
-    #     config.psfIterations = psf_iter
-    #     self.task = CharacterizeImageTask(config=config)
 
-    # def deblend_task(self):
-    #     self.name = "Deblend"
-    #     self.task = SourceDeblendTask(schema=self.schema)
+# def plot_lc_examples(run_path, n_ev, event_start=0, join=False):
+#     show = False if join else True
+#     data_event = pd.read_csv(run_path + "data_events.csv")
+
+#     fig, axs = plt.subplots(n_ev * 2, 6, figsize=(20, n_ev * 6))
+#     events_id = np.arange(event_start, event_start + n_ev)
+    
+#     for i, row_index in zip(events_id, range(0, n_ev * 2, 2)):
+#         lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(i) and file.endswith(".csv")])
+        
+#         for j, (lc_path, ax, img_ax) in enumerate(zip(lc_list, axs[row_index], axs[row_index + 1])):  
+#             lc = LightCurve(data=run_path + lc_path)
+#             lc.model = "Pacz"; lc.event_id=i
+#             data_lc = data_event[(data_event["event_id"] == i) & (data_event["band"] == lc.band)]
+#             t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
+#             lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
+            
+#             plt.sca(ax)
+#             lc.plot(title=None, mag_lim=None, figsize=None, show=False) 
+#             ax.invert_yaxis()
+#             ax.grid()
+#             ax.legend().remove()
+#             ax.set_title('')
+#             ax.tick_params(axis='y', labelsize=8)
+#             ax.tick_params(axis='x', labelsize=8)
+#             ax.set_xlabel("Epoch (MJD)", fontsize=10)
+#             ax.text(0.02, 0.98, f"eventId: {i}\nBand: {lc.band}", transform=ax.transAxes, 
+#                     fontsize=10, verticalalignment='top', horizontalalignment='left')
+            
+#             if i != events_id[-1]:
+#                 ax.set_xticklabels([])
+#                 ax.set_xticks([])
+#                 ax.set_xlabel("")
+            
+#             if j != 0:
+#                 ax.set_ylabel("")
+#             img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
+#             if os.path.exists(img_path):
+#                 img = imread(img_path)
+#                 y_start, y_end = 30, -20
+#                 x_start, x_end = 40, -30
+#                 img_cropped = img[y_start:y_end, x_start:x_end]
+#                 img_ax.imshow(img_cropped)
+#                 img_ax.set_title(f"Event {i} - Band: {lc.band}", fontsize=10)
+#                 img_ax.set_xlabel("RA (deg)", fontsize=10)
+#                 img_ax.set_ylabel("Dec (deg)", fontsize=10)
+              
+#                 img_ax.tick_params(axis='both', which='both', length=0) 
+#                 img_ax.spines['top'].set_visible(False)  
+#                 img_ax.spines['right'].set_visible(False) 
+#                 img_ax.spines['left'].set_visible(False) 
+#                 img_ax.spines['bottom'].set_visible(False) 
+#             else:
+#                 img_ax.axis("off")  
+
+#     plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
+#     plt.tight_layout(pad=0.000001)
+#     plt.savefig(run_path + f"lc_examples_ev{event_start}-{event_start + n_ev}.png", bbox_inches='tight')
+
+
+def plot_lc_examples(run_path, n_ev, event_start=0, join=False, plot_fov=True):
+    show = False if join else True
+    data_event = pd.read_csv(run_path + "data_events.csv")
+
+    num_rows = n_ev * 2 if plot_fov else n_ev  # Define el número de filas dinámicamente
+    fig, axs = plt.subplots(num_rows, 6, figsize=(20, num_rows * 3))
+
+    events_id = np.arange(event_start, event_start + n_ev)
+    
+    for i in range(n_ev):
+        event_id = events_id[i]
+        row_index = i * (2 if plot_fov else 1)  # Calcula la fila correctamente
+        
+        lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(event_id) and file.endswith(".csv")])
+        
+        for j, (lc_path, ax) in enumerate(zip(lc_list, axs[row_index])):  
+            lc = LightCurve(data=run_path + lc_path)
+            lc.model = "Pacz"
+            lc.event_id = event_id
+            
+            # Extraer parámetros del evento
+            data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"] == lc.band)]
+            t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
+            lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
+            
+            plt.sca(ax)
+            lc.plot(title=None, mag_lim=None, figsize=None, show=False) 
+            ax.invert_yaxis()
+            ax.grid()
+            ax.legend().remove()
+            ax.set_title('')
+            ax.tick_params(axis='y', labelsize=8)
+            ax.tick_params(axis='x', labelsize=8)
+            ax.set_xlabel("Epoch (MJD)", fontsize=10)
+            ax.text(0.02, 0.98, f"eventId: {event_id}\nBand: {lc.band}", transform=ax.transAxes, 
+                    fontsize=10, verticalalignment='top', horizontalalignment='left')
+            
+            if i != n_ev - 1:
+                ax.set_xticklabels([])
+                ax.set_xticks([])
+                ax.set_xlabel("")
+            
+            if j != 0:
+                ax.set_ylabel("")
+        
+        if plot_fov:
+            for j, (lc_path, img_ax) in enumerate(zip(lc_list, axs[row_index + 1])):  
+                img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
+                if os.path.exists(img_path):
+                    img = imread(img_path)
+                    y_start, y_end = 30, -20
+                    x_start, x_end = 40, -30
+                    img_cropped = img[y_start:y_end, x_start:x_end]
+                    img_ax.imshow(img_cropped)
+                    img_ax.set_title(f"Event {event_id} - Band: {lc.band}", fontsize=10)
+                    img_ax.set_xlabel("RA (deg)", fontsize=10)
+                    img_ax.set_ylabel("Dec (deg)", fontsize=10)
+
+                    img_ax.tick_params(axis='both', which='both', length=0) 
+                    img_ax.spines['top'].set_visible(False)  
+                    img_ax.spines['right'].set_visible(False) 
+                    img_ax.spines['left'].set_visible(False) 
+                    img_ax.spines['bottom'].set_visible(False) 
+                else:
+                    img_ax.axis("off")  
+
+    plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
+    plt.tight_layout(pad=0.000001)
+    plt.savefig(run_path + f"lc_examples_ev{event_start}-{event_start + n_ev}.png", bbox_inches='tight')
+
 
 

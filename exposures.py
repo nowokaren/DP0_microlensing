@@ -59,11 +59,13 @@ warnings.filterwarnings("ignore", message="Spacing is not a multiple of base spa
 class Calexp:
     def __init__(self, data_id):
         self.data_id = data_id
-        if type(data_id) != dict:
-            self.expF = data_id
-        elif type(data_id) == _dataset_ref.DatasetRef:
+        if isinstance(data_id, afwImage._exposure.ExposureF):
+            self.expF = self.data_id
+        elif isinstance(data_id,_dataset_ref.DatasetRef):
             self.data_id = {'visit': dataRef.dataId['visit'], 'detector': dataRef.dataId['detector']}
-            self.expF = butler.get('calexp', **data_id)
+            self.expF = butler.get('calexp', **self.data_id)
+        elif isinstance(data_id, str):
+            self.expF = afwImage.ExposureF(self.data_id)
         else:
             self.expF = butler.get('calexp', **data_id)
         self.wcs = self.expF.getWcs()
@@ -145,7 +147,7 @@ class Calexp:
         return cutout
     
 
-    def plot(self, title=None, fig=None, ax=None, warp=None, roi=None, ticks=8, cut_size=401, col=None, figsize=None, n_ticks = (10,10)):
+    def plot(self, title=None, fig=None, ax=None, warp=None, roi=None, ticks=8, cut_size=401, col=None, figsize=None, n_ticks = (10,10), show=True):
         '''warp: calexp_ref'''
   
         if fig is None:
@@ -201,23 +203,14 @@ class Calexp:
             
     def add_point(self, ax, ra, dec, r=5, c="r"):
         x, y = self.sky_to_pix(ra,dec)
-        circle = Circle((x, y), radius=r, edgecolor=c, facecolor="none")  # Ajusta `radius` como desees
+        circle = Circle((x, y), radius=r, edgecolor=c, facecolor="none")
         ax.add_patch(circle)
-        
-    # def inject(self, inject_data, inject_task, fits=None):
-    #     """Inject sources into the calexp."""
-    #     try:
-    #         injected_output = inject_task.run(
-    #             injection_catalogs=[inject_data],
-    #             input_exposure=self.calexp.clone()
-    #         )
-    #         injected_exposure = injected_output.output_exposure
-    #         if fits is not False:
-    #             injected_exposure.writeFits(fits)
-    #         return (self.data_id.dataId, inject_data['exp_midpoint'], inject_data['mag'], injected_exposure)
-    #     except Exception as e:
-    #         print('No sources to inject for visit ', inject_data['visit'], "Error:", e)
-    #         return None
+
+    def save_plot(self, ax, image_path, show=False):
+        ax.figure.savefig(image_path, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close(ax.figure)
 
     def get_mag(self, flux, flux_err):
         return flux_to_mag(self.expF, flux, flux_err)
