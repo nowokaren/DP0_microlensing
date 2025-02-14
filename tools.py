@@ -1,6 +1,8 @@
 import numpy as np
 import random
 
+import sys
+
 def tri_sample(vertex, edge_threshold=0.01):
     """
     Generates a random dot into a triangle defined by vertex in (RA, Dec), avoiding edges.
@@ -90,6 +92,23 @@ def spherical_area(vertices):
     area_steradians = 4 * np.arctan(np.sqrt(np.tan(s / 2) * np.tan((s - d1) / 2) * np.tan((s - d2) / 2) * np.tan((s - d3) / 2)))
     area_degrees_squared = area_steradians * (180/np.pi)**2
     return area_degrees_squared
+
+
+
+def get_object_size(obj):
+    size = sys.getsizeof(obj) 
+    name = []; memory = []
+    print(f"Objeto: {obj}, Tamaño: {size} bytes")
+    if hasattr(obj, '__dict__'):
+        for attr_name, attr_value in obj.__dict__.items():
+            attr_size = sys.getsizeof(attr_value)
+            print(f"Atributo: {attr_name}, Tamaño: {attr_size} bytes")
+
+            if isinstance(attr_value, object):
+                memory.append(get_object_size(attr_value))
+                name.append(attr_value)
+    return name, memory
+
 
 
     

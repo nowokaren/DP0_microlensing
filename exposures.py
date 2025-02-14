@@ -4,6 +4,7 @@ import numpy as np
 import imageio
 import pandas as pd
 import os
+import gc
 import astropy.units as u
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
@@ -201,9 +202,10 @@ class Calexp:
         if return_ax:
             return ax
             
-    def add_point(self, ax, ra, dec, r=5, c="r"):
+    def add_point(self, ax, ra, dec, r=5, c="r", label=None):
         x, y = self.sky_to_pix(ra,dec)
         circle = Circle((x, y), radius=r, edgecolor=c, facecolor="none")
+        circle = Circle((x, y), radius=r, edgecolor=c, facecolor="none", label=label)
         ax.add_patch(circle)
 
     def save_plot(self, ax, image_path, show=False):
@@ -211,6 +213,7 @@ class Calexp:
         if show:
             plt.show()
         plt.close(ax.figure)
+        gc.collect()
 
     def get_mag(self, flux, flux_err):
         return flux_to_mag(self.expF, flux, flux_err)

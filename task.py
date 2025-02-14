@@ -3,6 +3,7 @@ import random
 import time
 from tqdm.notebook import tqdm
 import os
+import gc
 from datetime import datetime
 import numpy as np
 from matplotlib.image import imread
@@ -51,12 +52,12 @@ butler = Butler(butler_config, collections=collections)
 class Run:
     def __init__(self, name=None, ra=None, dec=None, bands=None, calexps_method="overlap", 
                  measure_method="ForcedMeas", density=None, area=None, radius=None, n_lc=0, 
-                 main_path="./runs", data_events=None, data_calexp=None, scale=None):
+                 main_path="./runs", data_events=None, data_calexps=None, scale=None):
 
         self.name = name if name else datetime.now().strftime("%Y%m%d_%H%M%S")
         self.main_path = os.path.join(main_path, self.name)
         os.makedirs(self.main_path, exist_ok=True)  
-        from_path = all(arg is None for arg in [ra, dec, bands, calexps_method, measure_method, density, area, radius, n_lc, data_events, data_calexp, scale])
+        from_path = all(arg is None for arg in [ra, dec, bands, calexps_method, measure_method, density, area, radius, n_lc, data_events, data_calexps, scale])
 
         if from_path:
             log_path = os.path.join(self.main_path, f"{self.name}_log.txt")
@@ -64,7 +65,7 @@ class Run:
             print(f"Loading data from {log_path}")
             self._load_from_path(log_path)
             data_events = os.path.join(self.main_path, "data_events.csv")
-            data_calexp = os.path.join(self.main_path, "data_calexp.csv")
+            data_calexps = os.path.join(self.main_path, "data_calexps.csv")
         else:
             self.ra = ra
             self.dec = dec
@@ -81,7 +82,7 @@ class Run:
         self.log = {"task": ["Start"], "time": [time.time()], "detail": [None]}  
         
         self.data_events = self._load_dataframe(data_events, columns=["event_id", "ra", "dec", "model", "band", "points"])
-        self.data_calexp = self._load_dataframe(data_calexp, columns=["detector", "visit", "mjd", "band", "overlap", "ids_events"])
+        self.data_calexps = self._load_dataframe(data_calexps, columns=["detector", "visit", "mjd", "band", "overlap", "lc_ids"])
         
         self.datasetRefs = None
         self.dist = None
@@ -214,7 +215,14 @@ class Run:
 
 
     def mjd(self, dataId):
-        return self.data_calexp.loc[(self.data_calexp["visit"] == dataId["visit"]) & (self.data_calexp["detector"] == dataId["detector"]), "mjd"].values[0]
+        return self.data_calexps.loc[(self.data_calexps["visit"] == dataId["visit"]) & (self.data_calexps["detector"] == dataId["detector"]), "mjd"].values[0]
+
+    def add_data_calexp(self, data_id, column, value):
+        self.data_calexps.loc[(self.data_calexps["detector"] == data_id["detector"]) & (self.data_calexps["visit"] == data_id["visit"]),column] = value
+
+    def add_data_event(self, event_id, band, column, value):
+        self.data_events.loc[(self.data_events["event_id"] == event_id) & (self.data_events["band"] == band),column] = value
+
         
     def log_task(self, name, det=None):
         self.log["time"].append(time.time())
@@ -227,7 +235,7 @@ class Run:
         schema.addField("coord_decErr", type="F", doc="Error in Dec coordinate")
         return schema
 
-    def collect_calexp(self, n_max=None, load_mjd=True):
+    def load_calexp(self, n_max=None, load_mjd=True):
         bands_str = f"({', '.join(map(repr, self.bands))})"
         print("Collecting calexps...")
         if self.calexps_method == "htm":
@@ -248,14 +256,14 @@ class Run:
             n_dataref = len(datasetRefs)
             print(f"Found {n_dataref} calexps.")
             ccd_visit = butler.get('ccdVisitTable')
-            self.data_calexp["detector"] = [calexp_data.dataId['detector'] for calexp_data in datasetRefs]
-            self.data_calexp["visit"] = [calexp_data.dataId['visit'] for calexp_data in datasetRefs]
-            self.data_calexp["mjd"] = [
+            self.data_calexps["detector"] = [calexp_data.dataId['detector'] for calexp_data in datasetRefs]
+            self.data_calexps["visit"] = [calexp_data.dataId['visit'] for calexp_data in datasetRefs]
+            self.data_calexps["mjd"] = [
                 ccd_visit[(ccd_visit['visitId'] == calexp_data.dataId['visit']) & 
                           (ccd_visit['detector'] == calexp_data.dataId['detector'])]['expMidptMJD'].values[0]
-                for calexp_data in tqdm(datasetRefs, desc="Processing MJD values")
+                for calexp_data in tqdm(datasetRefs, desc="Saving MJD values")
             ]
-            self.data_calexp["band"] = [calexp_data.dataId['band'] for calexp_data in datasetRefs]
+            self.data_calexps["band"] = [calexp_data.dataId['band'] for calexp_data in datasetRefs]
             self.log_task("Collecting calexps", det=n_dataref)
 
     def generate_location(self, dist=None):
@@ -282,20 +290,50 @@ class Run:
 
         return ra, dec
 
-    def add_lc(self, ra, dec, params, event_id, band, model="Pacz", plot=False):
+    def create_events_catalog(self, lc_data = "random"):
+        if lc_data == "random":
+            for event_id, m in enumerate(tqdm(np.linspace(17,22,process.n_lc), desc="Loading events")):
+                lc_ra, lc_dec = process.generate_location()
+                params = {"t_0": random.uniform(60300,61500),
+               "t_E": random.uniform(20, 200), 
+               "u_0": random.uniform(0.1,1)}
+                for band, dm in zip(process.bands, delta_mag):
+                    params["m_base"]=m+dm
+                    process.add_lc(lc_ra, lc_dec, params, event_id=event_id, band=band)
+        elif lc_data == "data_events":
+            for i, (j, event) in enumerate(tqdm(process.data_events.iterrows(), desc="Loading events:")):
+                lc_ra, lc_dec = event["ra"], event["dec"]
+                params = {"t_0": event["t_0"],
+                       "t_E": event["t_E"], 
+                       "u_0": event["u_0"]}
+                params["m_base"]=event["m_base"]
+                process.add_lc(lc_ra, lc_dec, params, event_id=event["event_id"], band=event["band"])
+        elif lc_data.endswith(".csv"):
+            df = pd.read_csv(lc_data)
+            for i, (j, event) in enumerate(tqdm(process.data_events.iterrows(), desc="Loading events:")):
+                lc_ra, lc_dec = event["ra"], event["dec"]
+                params = {"t_0": event["t_0"],
+                       "t_E": event["t_E"], 
+                       "u_0": event["u_0"]}
+                params["m_base"]=event["m_base"]
+                process.add_lc(lc_ra, lc_dec, params, event_id=event["event_id"], band=event["band"])            
+
+    def add_lc(self, ra, dec, params, event_id, band, model="Pacz", plot=False, to_df = True):
         lc = LightCurve(ra, dec, band=band)
-        lc.data["mjd"] = self.data_calexp[self.data_calexp["band"]==band]["mjd"]
-        lc.data["visit"] = self.data_calexp[self.data_calexp["band"]==band]["visit"]
-        lc.data["detector"] = self.data_calexp[self.data_calexp["band"]==band]["detector"]
+        lc.data["mjd"] = self.data_calexps[self.data_calexps["band"]==band]["mjd"]
+        lc.data["visit"] = self.data_calexps[self.data_calexps["band"]==band]["visit"]
+        lc.data["detector"] = self.data_calexps[self.data_calexps["band"]==band]["detector"]
         lc.simulate(params, model=model, plot=plot)
         lc.event_id = event_id
         new_lc = {"event_id":event_id, "ra": ra, "dec": dec, "model": model, "band": band}
-        for key in params.keys():
-            if key not in self.data_events.columns:
-                self.data_events[key] = None  
-            new_lc[key] = params[key] 
-        self.data_events.loc[len(self.data_events)] = new_lc
-        self.inj_lc.append(lc)
+        if to_df:
+            for key in params.keys():
+                if key not in self.data_events.columns:
+                    self.data_events[key] = None  
+                new_lc[key] = params[key] 
+            self.data_events.loc[len(self.data_events)] = new_lc
+            self.inj_lc.append(lc)
+
 
     def inject_task(self):
         inject_config = VisitInjectConfig()
@@ -303,44 +341,46 @@ class Run:
 
     
     def create_injection_table(self, calexp, band):
+        print("Creating injection_catalog ...")
         catalog = []
         visit = calexp.data_id["visit"]
         detector = calexp.data_id["detector"]
-        mjd = self.data_calexp[(self.data_calexp["visit"] == visit) & (self.data_calexp["detector"] == detector)]["mjd"].values[0]
-        for lc in self.inj_lc:
-            if (lc.band == band) and (calexp.contains(lc.ra, lc.dec)) and (~calexp.check_edge(lc.ra, lc.dec, d=100)):
+        mjd = self.data_calexps[(self.data_calexps["visit"] == visit) & (self.data_calexps["detector"] == detector)]["mjd"].values[0]
+        for i, lc in enumerate(self.inj_lc):
+            if (lc.band == band): #and (calexp.contains(lc.ra, lc.dec)) and (~calexp.check_edge(lc.ra, lc.dec, d=100)):
                 mag_inj = lc.data[(lc.data["visit"] == visit) & (lc.data["detector"] == detector)]["mag_inj"].values[0]
-                catalog.append([visit, detector, lc.ra, lc.dec, "Star", mjd, mag_inj])
+                catalog.append([i, visit, detector, lc.ra, lc.dec, "Star", mjd, mag_inj])
         if len(catalog)==0:
             return False
         else:
-            return Table(rows=catalog,names=["visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
+            return Table(rows=catalog,names=["lc_id", "visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
 
-    def check_injection_catalog(self, calexp, catalog, before_injection = True):
-        ra, dec = catalog["ra"], catalog["dec"]
-        if before_injection:
-            mask_visit = np.array(catalog["visit"] == calexp.data_id["visit"])
-            mask_detector = np.array(catalog["detector"] == calexp.data_id["detector"])
-            mask_contain = np.array(calexp.contains(ra, dec)) 
-            if False in mask_contain:
-                print("Light curves NOT contained: ", len([i for i in range(len(ra)) if not mask_contain[i]]))
-            mask_edge = np.array([calexp.check_edge(r, d, d=100) for r, d in zip(ra, dec)])
-            if True in mask_edge:
-                print("Light curves near edge: ", len([i for i in range(len(ra)) if mask_edge[i]]))
-            keep_mask = mask_contain & ~mask_edge & mask_detector & mask_visit
-        else:
-            mask_flag = np.array([i!=0 for i in catalog["injection_flag"]])
-            if True in mask_flag:
-                print("Light curves marked FLAG: ", [i for i in range(len(ra)) if mask_flag[i]])
-            keep_mask = ~mask_flag
-        filtered_catalog = catalog[keep_mask]
-        data_id = calexp.data_id
-        self.data_calexp.loc[(self.data_calexp["detector"] == data_id["detector"]) & (self.data_calexp["visit"] == data_id["visit"]), "ids_events"] = "-".join(map(str, self.data_events[self.data_events["ra"].isin(filtered_catalog["ra"].value)].index))
-        return filtered_catalog
+    # def check_injection_catalog(self, calexp, catalog, before_injection = True):
+    #     ra, dec = catalog["ra"], catalog["dec"]
+    #     if before_injection:
+    #         mask_visit = np.array(catalog["visit"] == calexp.data_id["visit"])
+    #         mask_detector = np.array(catalog["detector"] == calexp.data_id["detector"])
+    #         mask_contain = np.array(calexp.contains(ra, dec)) 
+    #         if False in mask_contain:
+    #             print("Light curves NOT contained: ", len([i for i in range(len(ra)) if not mask_contain[i]]))
+    #         mask_edge = np.array([calexp.check_edge(r, d, d=100) for r, d in zip(ra, dec)])
+    #         if True in mask_edge:
+    #             print("Light curves near edge: ", len([i for i in range(len(ra)) if mask_edge[i]]))
+    #         keep_mask = mask_contain & ~mask_edge & mask_detector & mask_visit
+    #     else:
+    #         mask_flag = np.array([i!=0 for i in catalog["injection_flag"]])
+    #         if True in mask_flag:
+    #             print("Light curves marked FLAG: ", [i for i in range(len(ra)) if mask_flag[i]])
+    #         keep_mask = ~mask_flag
+    #     filtered_catalog = catalog[keep_mask]
+    #     data_id = calexp.data_id
+    #     self.data_calexps.loc[(self.data_calexps["detector"] == data_id["detector"]) & (self.data_calexps["visit"] == data_id["visit"]), "ids_events"] = "-".join(map(str, self.data_events[self.data_events["ra"].isin(filtered_catalog["ra"].value)].index))
+    #     return filtered_catalog
 
 
         
     def inject_calexp(self, calexp, inject_table, save_fit = None):
+        print("Injecting calexp...")
         exposure = calexp.expF
         try:
             injected_output = self.tasks["Injection"].run(
@@ -350,10 +390,6 @@ class Run:
                 photo_calib=exposure.getPhotoCalib(),
                 wcs=calexp.wcs)
         except Exception as e:
-            print("Couldn't inject the injection_catalog")
-            print("Error:", str(e))
-            print("Detailed traceback:")
-            print(traceback.format_exc()) 
             return None, None
 
         injected_exposure = injected_output.output_exposure
@@ -446,8 +482,8 @@ class Run:
     #         return 
 
 
-    def measurement(self, schema, calexp, injected_catalog):
-        table = pd.DataFrame(columns=["ra", "dec", "flux", "flux_err", "mag", "mag_err", "flag"])
+    def measure_calexp(self, schema, calexp, injected_catalog):
+        table = pd.DataFrame(columns=["lc_id", "ra", "dec", "flux", "flux_err", "mag", "mag_err", "mag_inj", "flag"])
         table["ra"] = injected_catalog["ra"]; table["dec"] = injected_catalog["dec"]
         
         if self.measure_method  == "ForcedMeas":
@@ -463,12 +499,16 @@ class Run:
             forcedMeasCat = self.tasks["Measurement"].generateMeasCat(calexp.expF, sources, calexp.wcs)
             self.tasks["Measurement"].run(forcedMeasCat, calexp.expF, sources, calexp.wcs)
             sources = forcedMeasCat.asAstropy()
-            for i, source in enumerate(sources):
-                ra, dec = calexp.pix_to_sky(source["slot_Centroid_x"],source["slot_Centroid_y"])
-                flux, flux_err = source["base_PsfFlux_instFlux"], source["base_PsfFlux_instFluxErr"]
-                mag, mag_err = calexp.get_mag(flux, flux_err)
-                table.loc[np.isclose(table["ra"], ra,rtol=1e-5) & np.isclose(table["dec"], dec,rtol=1e-5), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
-                # table.loc[i, ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, 0]
+            sources["coord_ra"] = injected_catalog["ra"]
+            sources["coord_dec"] = injected_catalog["dec"]
+            sources["lc_id"] = injected_catalog["lc_id"]
+            sources["mag_inj"] = injected_catalog["mag"]
+            table["flux"], table["flux_err"] = sources["base_PsfFlux_instFlux"], sources["base_PsfFlux_instFluxErr"]
+            MAGS = [calexp.get_mag(f, ferr) for f, ferr in zip(table["flux"], table["flux_err"])]
+            table["mag"], table["mag_err"] = [M[0] for M in MAGS], [M[1] for M in MAGS] 
+            table["ra"] = injected_catalog["ra"]; table["dec"] = injected_catalog["dec"]
+            table["lc_id"] = sources["lc_id"]
+            table["mag_inj"] = sources["mag_inj"]
             self.log_task("Measurement", det = len(table))
         elif self.measure_method == "SingleFrame":
             tab = afwTable.SourceTable.make(schema)
@@ -492,6 +532,13 @@ class Run:
                 mag, mag_err = calexp.get_mag(flux, flux_err)
                 # table.loc[(table["ra"] == ra) & (table["dec"] == dec), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
                 table.loc[np.isclose(table["ra"], ra,rtol=1e-5) & np.isclose(table["dec"], dec,rtol=1e-5), ["flux", "flux_err", "mag", "mag_err", "flag"]] = [flux, flux_err, mag, mag_err, flag]
+
+        flag_cols = [col for col in sources.columns if "flag" in col]
+        mask = np.array([True in i for i in sources[flag_cols]])
+        sources[mask][flag_cols]
+        table["flag"] = ["-".join([col for col, val in zip(flag_cols, s) if val]) 
+            for s in sources[flag_cols].as_array()]
+        table.loc[table["flag"]=="","flag"] = 0
         return table, sources
 
 
@@ -631,16 +678,37 @@ class Run:
                 lc.plot(title = lc_path, show=show)
             show=False
 
-    def save_lc(self):
+    def save_light_curves(self, drop_na=True):
         for band in self.bands:
             lcs = [lc for lc in self.inj_lc if lc.band == band]
-            print(f"Saving {len(lcs)} light curves in band {band}")
+            print(f"Saving {len(lcs)} light curves for band {band}")
             for lc in tqdm(lcs):
-                lc.data=lc.data[~pd.isna(lc.data["mag"])]
+                if drop_na:
+                    lc.data=lc.data[~pd.isna(lc.data["mag"])]
                 lc.save(self.main_path+f"/lc_{lc.event_id}_{lc.band}.csv")
+                
+    def plot_FoV(self, lc, calexp, r=40, fov_size=200, show=True):
+        image_path = f"lc_{lc.event_id}_{lc.band}.png"
+        if image_path not in os.listdir(self.main_path):
+            roi = [(lc.ra, lc.dec), fov_size]
+            ax = calexp.plot(roi=roi, figsize=(6,6))
+            calexp.add_point(ax, lc.ra, lc.dec, r=r)
+            calexp.save_plot(ax, self.main_path+"/"+image_path, show=show)
+            print(f"{image_path} saved.")
+            plt.clf() 
+            plt.close(ax.figure) 
+            plt.close('all') 
+            gc.collect()
+            del ax, calexp
 
-    def save_time_log(self):
+    def save_data(self, drop_na=True):
+        for lc in self.inj_lc:
+            self.add_data_event(lc.event_id, lc.band, "points", lc.data["mag"].count())
+        self.data_events.to_csv(self.main_path+'/data_events.csv', index=False)
+        self.data_calexps.to_csv(self.main_path+'/data_calexps.csv', index=False)
+        self.save_light_curves(drop_na=drop_na)
         pd.DataFrame(self.log).to_csv(self.main_path+'/time_log.csv', index=False)
+        self.time_analysis()
 
 
 def plot_event(path, events_id=None, model="Pacz", mag_lim=(30,14), figsize=(10,4), join=True):
@@ -665,82 +733,28 @@ def plot_event(path, events_id=None, model="Pacz", mag_lim=(30,14), figsize=(10,
             lc.plot(title = f"Event ID: {i}", mag_lim = mag_lim, figsize=figsize, show=show)
         show=False if join else True
 
-# def plot_lc_examples(run_path, n_ev, event_start=0, join=False):
-#     show = False if join else True
-#     data_event = pd.read_csv(run_path + "data_events.csv")
 
-#     fig, axs = plt.subplots(n_ev * 2, 6, figsize=(20, n_ev * 6))
-#     events_id = np.arange(event_start, event_start + n_ev)
-    
-#     for i, row_index in zip(events_id, range(0, n_ev * 2, 2)):
-#         lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(i) and file.endswith(".csv")])
-        
-#         for j, (lc_path, ax, img_ax) in enumerate(zip(lc_list, axs[row_index], axs[row_index + 1])):  
-#             lc = LightCurve(data=run_path + lc_path)
-#             lc.model = "Pacz"; lc.event_id=i
-#             data_lc = data_event[(data_event["event_id"] == i) & (data_event["band"] == lc.band)]
-#             t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
-#             lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
-            
-#             plt.sca(ax)
-#             lc.plot(title=None, mag_lim=None, figsize=None, show=False) 
-#             ax.invert_yaxis()
-#             ax.grid()
-#             ax.legend().remove()
-#             ax.set_title('')
-#             ax.tick_params(axis='y', labelsize=8)
-#             ax.tick_params(axis='x', labelsize=8)
-#             ax.set_xlabel("Epoch (MJD)", fontsize=10)
-#             ax.text(0.02, 0.98, f"eventId: {i}\nBand: {lc.band}", transform=ax.transAxes, 
-#                     fontsize=10, verticalalignment='top', horizontalalignment='left')
-            
-#             if i != events_id[-1]:
-#                 ax.set_xticklabels([])
-#                 ax.set_xticks([])
-#                 ax.set_xlabel("")
-            
-#             if j != 0:
-#                 ax.set_ylabel("")
-#             img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
-#             if os.path.exists(img_path):
-#                 img = imread(img_path)
-#                 y_start, y_end = 30, -20
-#                 x_start, x_end = 40, -30
-#                 img_cropped = img[y_start:y_end, x_start:x_end]
-#                 img_ax.imshow(img_cropped)
-#                 img_ax.set_title(f"Event {i} - Band: {lc.band}", fontsize=10)
-#                 img_ax.set_xlabel("RA (deg)", fontsize=10)
-#                 img_ax.set_ylabel("Dec (deg)", fontsize=10)
-              
-#                 img_ax.tick_params(axis='both', which='both', length=0) 
-#                 img_ax.spines['top'].set_visible(False)  
-#                 img_ax.spines['right'].set_visible(False) 
-#                 img_ax.spines['left'].set_visible(False) 
-#                 img_ax.spines['bottom'].set_visible(False) 
-#             else:
-#                 img_ax.axis("off")  
-
-#     plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
-#     plt.tight_layout(pad=0.000001)
-#     plt.savefig(run_path + f"lc_examples_ev{event_start}-{event_start + n_ev}.png", bbox_inches='tight')
-
-
-def plot_lc_examples(run_path, n_ev, event_start=0, join=False, plot_fov=True):
+def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
     show = False if join else True
     data_event = pd.read_csv(run_path + "data_events.csv")
-
+    n_ev = len(events_id)
     num_rows = n_ev * 2 if plot_fov else n_ev  # Define el número de filas dinámicamente
     fig, axs = plt.subplots(num_rows, 6, figsize=(20, num_rows * 3))
-
-    events_id = np.arange(event_start, event_start + n_ev)
     
-    for i in range(n_ev):
-        event_id = events_id[i]
+    for i, event_id in enumerate(events_id):
         row_index = i * (2 if plot_fov else 1)  # Calcula la fila correctamente
         
         lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(event_id) and file.endswith(".csv")])
+        if len(lc_list)==0:
+            print(f"There isn't event with id {event_id}. Skipping...")
+            continue
+
+        lc_list_ugrizy = []
+        for band in "ugrizy":
+            lc_band_path = [lc for lc in lc_list if f"_{band}" in lc][0]
+            lc_list_ugrizy.append(lc_band_path)
         
-        for j, (lc_path, ax) in enumerate(zip(lc_list, axs[row_index])):  
+        for j, (lc_path, ax) in enumerate(zip(lc_list_ugrizy, axs[row_index])):  
             lc = LightCurve(data=run_path + lc_path)
             lc.model = "Pacz"
             lc.event_id = event_id
@@ -771,7 +785,7 @@ def plot_lc_examples(run_path, n_ev, event_start=0, join=False, plot_fov=True):
                 ax.set_ylabel("")
         
         if plot_fov:
-            for j, (lc_path, img_ax) in enumerate(zip(lc_list, axs[row_index + 1])):  
+            for j, (lc_path, img_ax) in enumerate(zip(lc_list_ugrizy, axs[row_index + 1])):  
                 img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
                 if os.path.exists(img_path):
                     img = imread(img_path)
@@ -779,21 +793,33 @@ def plot_lc_examples(run_path, n_ev, event_start=0, join=False, plot_fov=True):
                     x_start, x_end = 40, -30
                     img_cropped = img[y_start:y_end, x_start:x_end]
                     img_ax.imshow(img_cropped)
-                    img_ax.set_title(f"Event {event_id} - Band: {lc.band}", fontsize=10)
+                    band = lc_path.split(".")[0].split("_")[-1]
+                    img_ax.set_title(f"Event {event_id} - Band: {band}", fontsize=10)
                     img_ax.set_xlabel("RA (deg)", fontsize=10)
                     img_ax.set_ylabel("Dec (deg)", fontsize=10)
 
-                    img_ax.tick_params(axis='both', which='both', length=0) 
-                    img_ax.spines['top'].set_visible(False)  
-                    img_ax.spines['right'].set_visible(False) 
-                    img_ax.spines['left'].set_visible(False) 
-                    img_ax.spines['bottom'].set_visible(False) 
+                    # img_ax.tick_params(axis='both', which='both', length=0) 
+                    # img_ax.spines['top'].set_visible(False)  
+                    # img_ax.spines['right'].set_visible(False) 
+                    # img_ax.spines['left'].set_visible(False) 
+                    # img_ax.spines['bottom'].set_visible(False)
+
+                    img_ax.set_xticks([])
+                    img_ax.set_yticks([])
+                    img_ax.set_xticklabels([])
+                    img_ax.set_yticklabels([])
+
+                    img_ax.spines['top'].set_visible(False)
+                    img_ax.spines['right'].set_visible(False)
+                    img_ax.spines['left'].set_visible(False)
+                    img_ax.spines['bottom'].set_visible(False)
+
                 else:
                     img_ax.axis("off")  
 
     plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
     plt.tight_layout(pad=0.000001)
-    plt.savefig(run_path + f"lc_examples_ev{event_start}-{event_start + n_ev}.png", bbox_inches='tight')
+    plt.savefig(run_path + name, bbox_inches='tight')
 
 
 

@@ -52,7 +52,7 @@ class LightCurve:
             self._load_from_file(path)
             data = path
             self.path = path
-            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj"])
+            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj", "flag"])
         else:
             self.ra = ra
             self.dec = dec
@@ -62,7 +62,7 @@ class LightCurve:
             self.params = params
             self.calexp_data_ref = None
             self.calexp_dataIds = None
-            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj"])
+            self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj", "flag"])
 
 
     def __str__(self):
