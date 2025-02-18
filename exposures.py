@@ -150,7 +150,7 @@ class Calexp:
 
     def plot(self, title=None, fig=None, ax=None, warp=None, roi=None, ticks=8, cut_size=401, col=None, figsize=None, n_ticks = (10,10), show=True):
         '''warp: calexp_ref'''
-  
+        return_ax = False
         if fig is None:
             fig = plt.figure(figsize=figsize)
         if ax is None and warp is None:

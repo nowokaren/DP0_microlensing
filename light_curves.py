@@ -45,7 +45,7 @@ collections = '2.2i/runs/DP0.2'
 butler = Butler(butler_config, collections=collections)
 
 class LightCurve:
-    def __init__ (self, ra=None, dec=None, band=None, data=None, event_id=None, name=None, model = None, path = None, params = None):
+    def __init__ (self, ra=None, dec=None, band=None, data=None, event_id=None, name=None, model = None, path = None, params = None, blend_ra=None, blend_dec=None):
         '''data = pd.DataFrame(columns=["detector", "visit", "mjd", "mag_sim", "flux", "flux_err", "mag", "mag_err"])'''
 
         if path:
@@ -62,13 +62,15 @@ class LightCurve:
             self.params = params
             self.calexp_data_ref = None
             self.calexp_dataIds = None
+            self.blend_ra = blend_ra
+            self.blend_dec = blend_dec
             self._load_dataframe(data, columns=["detector", "visit", "mjd", "flux", "flux_err", "mag", "mag_err", "mag_inj", "flag"])
 
 
     def __str__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec}")
     def __repr__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec}")
 
     def _load_dataframe(self, data, columns):
         if data is None:
@@ -205,7 +207,7 @@ class LightCurve:
 
         self.ra = float(metadata.get("ra", "nan"))
         self.dec = float(metadata.get("dec", "nan"))
-        self.event_id = path.split("/")[-1].split("_")[1]
+        self.event_id = int(path.split("/")[-1].split("_")[1])
         self.band = metadata.get("band")
         self.model = metadata.get("model")
         self.params = metadata.get("params")
