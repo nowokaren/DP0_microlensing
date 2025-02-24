@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import pandas as pd
 
 import sys
 
@@ -111,4 +112,16 @@ def get_object_size(obj):
 
 
 
-    
+def random_pacz_param(model = "Pacz"):
+    if model == "Pacz":
+        params = {"t_0": random.uniform(60300,61500),
+               "t_E": random.uniform(20, 200), 
+               "u_0": random.uniform(0.1,1)}
+    else:
+        print(f"Parameters generator not created for model {model}.")
+        params = None
+    return params
+
+def load_trilegal(main_path="runs/", bands="ugrizY"):    
+    mags = pd.read_csv(main_path+"trilegal_dp0center_r62_d-32.csv", usecols=[*bands.upper()])
+    return mags

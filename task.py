@@ -1,58 +1,76 @@
-dp0_limits = [[48, 76], [-44,-28]] # [ra_lim, dec_lim]
-import random
-import time
-from tqdm.notebook import tqdm
-import os
+dp0_limits = [[48, 76], [-44, -28]]  # [ra_lim, dec_lim]
+load_models = ["Pacz"]
 import gc
-from datetime import datetime
-import numpy as np
-from matplotlib.image import imread
-import pandas as pd
-from astropy.table import Table, vstack
-from lsst.afw import table as afwTable
-from lsst.meas.base import SingleFrameMeasurementTask
-from lsst.meas.algorithms import SourceDetectionTask
-from lsst.source.injection import (
-    ingest_injection_catalog, generate_injection_catalog,
-    VisitInjectConfig, VisitInjectTask
-)
+import os
+import random
+import re
+import time
 import traceback
-from spherical_geometry.polygon import SphericalPolygon
+from datetime import datetime
+from itertools import product
 
-import lsst.daf.base as dafBase
-from light_curves import LightCurve
-from exposures import Calexp
-from scipy.spatial import KDTree
-import numpy as np
+import astropy.units as u
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from astropy.coordinates import SkyCoord
+from astropy.wcs import WCS
+from astropy.table import Table, vstack
 from matplotlib import cm
 from matplotlib.colors import Normalize
-from astropy.coordinates import SkyCoord
-from lsst.sphgeom import HtmPixelization, UnitVector3d, LonLat
-from lsst.geom import Angle, radians, degrees, SpherePoint
-from shapely.geometry import Polygon, Point
-from astropy.coordinates import SkyCoord
-import astropy.units as u
+from matplotlib.image import imread
 from regions import CircleSkyRegion, PolygonSkyRegion
-from itertools import product
-from astropy.table import Table
-from lsst.meas.base import ForcedMeasurementTask
+from scipy.spatial import KDTree
+from shapely.geometry import Polygon, Point
+from spherical_geometry.polygon import SphericalPolygon
+from tqdm.notebook import tqdm
 
-from tools import tri_sample, triangle_min_height, circ_sample
-from lsst.sphgeom import Region
-import re
-
+import lsst.daf.base as dafBase
 from lsst.daf.butler import Butler
-# butler_config = 'dp02'
+from lsst.geom import Angle, SpherePoint, degrees, radians
+from lsst.meas.algorithms import SourceDetectionTask
+from lsst.meas.base import ForcedMeasurementTask, SingleFrameMeasurementTask
+from lsst.sphgeom import HtmPixelization, Region, UnitVector3d, LonLat
+from lsst.source.injection import (
+    VisitInjectConfig, VisitInjectTask,
+    generate_injection_catalog, ingest_injection_catalog
+)
+from lsst.afw import table as afwTable
+from lsst.rsp import get_tap_service, retrieve_query
+
+from exposures import Calexp
+from light_curves import LightCurve
+from tools import circ_sample, tri_sample, triangle_min_height, random_pacz_param, load_trilegal
+
+# Configuración de Butler
 butler_config = 'dp02-direct'
 collections = '2.2i/runs/DP0.2'
 butler = Butler(butler_config, collections=collections)
 
-
 class Run:
     def __init__(self, name=None, ra=None, dec=None, bands=None, calexps_method="overlap", 
                  measure_method="ForcedMeas", density=None, area=None, radius=None, n_lc=0, 
-                 main_path="./runs", data_events=None, data_calexps=None, scale=None):
+                 main_path="./runs", data_events=None, data_calexps=None, scale=None, from_path = None):
+        '''
+        If no parameters are provided, the class attempts to load an existing run from the specified path.
+
+        Parameters:
+            name (str, optional): Name of the run. Defaults to timestamp format.
+            ra (float, optional): Right Ascension in degrees.
+            dec (float, optional): Declination in degrees.
+            bands (list, optional): List of photometric bands.
+            calexps_method (str, optional): Method for selecting calibration exposures ('overlap' or 'htm').
+            measure_method (str, optional): Measurement method used. Defaults to 'ForcedMeas'.
+            density (float, optional): Density of light curves per square degree.
+            area (float, optional): Area in square degrees.
+            radius (float, optional): Search radius for source matching.
+            n_lc (int, optional): Number of light curves to inject. Defaults to 0.
+            main_path (str, optional): Base directory for storing run data.
+            data_events (str or pd.DataFrame, optional): Path to the event data CSV or a dataframe.
+            data_calexps (str or pd.DataFrame, optional): Path to the calibration exposures CSV or a dataframe.
+            scale (float, optional): Radius in deg if method_calexp is overlap, HTM level if method_calexp is htm.
+        '''
+
 
         self.name = name if name else datetime.now().strftime("%Y%m%d_%H%M%S")
         self.main_path = os.path.join(main_path, self.name)
@@ -60,12 +78,22 @@ class Run:
         from_path = all(arg is None for arg in [ra, dec, bands, calexps_method, measure_method, density, area, radius, n_lc, data_events, data_calexps, scale])
 
         if from_path:
+            self.main_path = from_path.split("/")[:-1].join("/")
+            self.name = from_path.split("/")[-1]
             log_path = os.path.join(self.main_path, f"{self.name}_log.txt")
             os.path.exists(log_path)
             print(f"Loading data from {log_path}")
             self._load_from_path(log_path)
             data_events = os.path.join(self.main_path, "data_events.csv")
             data_calexps = os.path.join(self.main_path, "data_calexps.csv")
+            for i, (j, event) in enumerate(tqdm(self.data_events.iterrows(), desc="Loading events:")):
+                lc_ra, lc_dec = event["ra"], event["dec"]
+                params = {"t_0": event["t_0"],
+                           "t_E": event["t_E"], 
+                           "u_0": event["u_0"]}
+                params["m_base"]=event["m_base"]
+                self.add_lc(lc_ra, lc_dec, params, event_id=event["event_id"], band=event["band"], to_df = False)
+    
         else:
             self.ra = ra
             self.dec = dec
@@ -81,13 +109,14 @@ class Run:
         self.tasks = {}  
         self.log = {"task": ["Start"], "time": [time.time()], "detail": [None]}  
         
-        self.data_events = self._load_dataframe(data_events, columns=["event_id", "ra", "dec", "model", "band", "points"])
+        self.data_events = self._load_dataframe(data_events, columns=["event_id", "ra", "dec", "model", "band", "points", "blend_ra", "blend_dec", "blend_objId"])
         self.data_calexps = self._load_dataframe(data_calexps, columns=["detector", "visit", "mjd", "band", "overlap", "lc_ids"])
         
         self.datasetRefs = None
         self.dist = None
         self.ref_dist = None
         self.inject_table = {band: None for band in self.bands}
+        self.sources = None
 
         if self.calexps_method == "htm":
             self._setup_htm(self.scale)
@@ -223,6 +252,28 @@ class Run:
     def add_data_event(self, event_id, band, column, value):
         self.data_events.loc[(self.data_events["event_id"] == event_id) & (self.data_events["band"] == band),column] = value
 
+    def load_sources(self, ra=None, dec=None, radius=None):
+        service = get_tap_service("tap")
+        assert service is not None
+        if ra is None and dec is None and radius is None:
+            query = "SELECT coord_ra, coord_dec, objectId "\
+            "FROM dp02_dc2_catalogs.Object "\
+            "WHERE CONTAINS(POINT('ICRS', coord_ra, coord_dec), "\
+            f"CIRCLE('ICRS', {self.ra}, {self.dec}, {self.radius})) = 1 "\
+            "AND detect_isPrimary = 1 "
+        else:
+            query = "SELECT coord_ra, coord_dec, objectId "\
+            "FROM dp02_dc2_catalogs.Object "\
+            "WHERE CONTAINS(POINT('ICRS', coord_ra, coord_dec), "\
+            f"CIRCLE('ICRS', {ra}, {dec}, {radius})) = 1 "\
+            "AND detect_isPrimary = 1 "
+        job = service.submit_job(query)
+        job.run()
+        job.wait(phases=['COMPLETED', 'ERROR'])
+        results = job.fetch_result().to_table().to_pandas()
+        results["injected"] = None
+        return results
+
         
     def log_task(self, name, det=None):
         self.log["time"].append(time.time())
@@ -266,7 +317,7 @@ class Run:
             self.data_calexps["band"] = [calexp_data.dataId['band'] for calexp_data in datasetRefs]
             self.log_task("Collecting calexps", det=n_dataref)
 
-    def generate_location(self, dist=None):
+    def generate_location(self, dist=None, blend=None):
         if dist is None:
             if self.calexps_method == "htm":
                 self.ref_dist = triangle_min_height(self.htm_vertex)
@@ -275,61 +326,106 @@ class Run:
             self.dist = self.ref_dist / 20
         else:
             self.dist = dist
-    
-        distance = self.dist / 2
+
         if self.calexps_method == "htm":
             ra, dec = tri_sample(self.htm_vertex)
         elif self.calexps_method == "overlap":
             ra, dec = circ_sample(self.ra, self.dec, self.radius, margin=self.dist)
-    
-        if len(self.inj_lc) != 0:
-            for lc in self.inj_lc:
-                distance = np.sqrt((lc.ra - ra) ** 2 + (lc.dec - dec) ** 2)
-                if distance < self.dist: 
-                    return self.generate_location(dist=self.dist) 
+        if self.sources is None:
+            self.sources = self.load_sources()
+        if blend is not None:
+            sources = self.load_sources(ra, dec, 0.002)
+            idx = random.choice(sources.index) 
+            source = sources.loc[idx]
+            if len(sources)>0 and self.sources.loc[self.sources["objectId"]==obj_id,"injected"].values[0] is None:
+                obj_id = source["objectId"]
+                self.sources.loc[self.sources["objectId"]==obj_id, "injected"]=blend
+            else:
+                return self.generate_location(dist=self.dist, blend=blend)
+            blend_ra, blend_dec = source["coord_ra"], source["coord_dec"]
+            blend_objId = obj_id
+            if blend >0:
+                coord = SkyCoord(blend_ra, blend_dec, unit="deg")
+                new_coord = coord.directional_offset_by(np.random.uniform(0, 2*np.pi), blend*u.deg)
+                return new_coord.ra.value, new_coord.dec.value, blend_ra, blend_dec, blend_objId
+            return blend_ra, blend_dec, blend_ra, blend_dec, blend_objId
+        else:
+            sources = self.load_sources(ra, dec, 0.004)
+            distances =[SpherePoint(ra, dec, degrees).separation(SpherePoint(sources.loc[i,"coord_ra"],
+sources.loc[i,"coord_dec"], degrees)) for i in range(len(sources))]
+            close_source = [d.asDegrees() for d in distances if d<0.001*degrees]
 
-        return ra, dec
+            if len(close_source)>0: 
+                return self.generate_location(dist=self.dist) 
+            distances = [SpherePoint(ra, dec, degrees).separation(SpherePoint(self.data_events["ra"][i],self.data_events["dec"][i], degrees)) for i in range(len(self.data_events))]
+            close_source = [d.asDegrees() for d in distances if d<0.001*degrees]
+            if len(close_source)>0: 
+                return self.generate_location(dist=self.dist)
+            return ra, dec, None, None, None
 
-    def create_events_catalog(self, lc_data = "random"):
-        if lc_data == "random":
-            for event_id, m in enumerate(tqdm(np.linspace(17,22,process.n_lc), desc="Loading events")):
-                lc_ra, lc_dec = process.generate_location()
-                params = {"t_0": random.uniform(60300,61500),
-               "t_E": random.uniform(20, 200), 
-               "u_0": random.uniform(0.1,1)}
-                for band, dm in zip(process.bands, delta_mag):
-                    params["m_base"]=m+dm
-                    process.add_lc(lc_ra, lc_dec, params, event_id=event_id, band=band)
-        elif lc_data == "data_events":
-            for i, (j, event) in enumerate(tqdm(process.data_events.iterrows(), desc="Loading events:")):
-                lc_ra, lc_dec = event["ra"], event["dec"]
+    def create_events_catalog(self, file = None, n_lc=100, loc="random", models="random", mags="trilegal", params="random", bands="ugrizy", blend = None, main_path = "runs/"):
+        ''' 
+        blend is list of distances for blending and None for none blending
+        '''
+        if file is None:
+            for i in tqdm(range(n_lc), desc="Loading light curves"): 
+                if isinstance(loc, str):
+                    if loc=="random":
+                        lc_ra, lc_dec, blend_ra, blend_dec, blend_objId = self.generate_location()
+                        blend_ra, blend_dec =None, None
+                    elif loc=="blend" and isinstance(blend, list):
+                        lc_ra, lc_dec, blend_ra, blend_dec, blend_objId = self.generate_location(blend=blend[i])
+                    elif loc=="blend" and isinstance(blend, float):
+                        lc_ra, lc_dec, blend_ra, blend_dec, blend_objId = self.generate_location(blend=blend)
+                else:
+                    lc_ra, lc_dec, blend_ra, blend_dec = loc.loc[i].values
+                if models == "random":
+                    model = random.choice(load_models)
+                else:
+                    model = models[i]
+                if params == "random":
+                    param = random_pacz_param(model)
+                else:
+                    param = {col: df[col].iloc[5] for col in df.columns}
+                for band in bands:
+                    if mags == "trilegal":
+                        if i==0:
+                            mags_trilegal = load_trilegal(main_path = main_path, bands = self.bands)
+                        mag = mags_trilegal[band.upper()][i]
+                    else:
+                        mag = mags[i].values[0]
+                    param["m_base"] = mag
+                    self.add_lc(lc_ra, lc_dec, param, event_id=i, band=band, blend_ra = blend_ra, blend_dec = blend_dec, blend_objId = blend_objId)
+        else:
+            if file == "data_events":
+                df = self.data_events
+                desc = "Loading from self.data_events"
+            elif file.endswith(".csv"):
+                df = pd.read_csv(file)
+                desc = f"Loading from {file}"
+            for i, (j, event) in enumerate(tqdm(df.iterrows(), desc=desc)):
                 params = {"t_0": event["t_0"],
-                       "t_E": event["t_E"], 
-                       "u_0": event["u_0"]}
-                params["m_base"]=event["m_base"]
-                process.add_lc(lc_ra, lc_dec, params, event_id=event["event_id"], band=event["band"])
-        elif lc_data.endswith(".csv"):
-            df = pd.read_csv(lc_data)
-            for i, (j, event) in enumerate(tqdm(process.data_events.iterrows(), desc="Loading events:")):
-                lc_ra, lc_dec = event["ra"], event["dec"]
-                params = {"t_0": event["t_0"],
-                       "t_E": event["t_E"], 
-                       "u_0": event["u_0"]}
-                params["m_base"]=event["m_base"]
-                process.add_lc(lc_ra, lc_dec, params, event_id=event["event_id"], band=event["band"])            
+                           "t_E": event["t_E"], 
+                           "u_0": event["u_0"]}
+                params["m_base"] = event["m_base"]
+                self.add_lc(event["ra"], event["dec"], params, event_id=event["event_id"], band=event["band"], blend_ra = event["blend_ra"], blend_dec = event["blend_dec"], blend_objId = event["blend_objId"])
+            
 
-    def add_lc(self, ra, dec, params, event_id, band, model="Pacz", plot=False, to_df = True):
+    def add_lc(self, ra, dec, params, event_id, band, model="Pacz", blend_ra = None, blend_dec = None,  blend_objId = None, plot=False, to_df = True):
         lc = LightCurve(ra, dec, band=band)
         lc.data["mjd"] = self.data_calexps[self.data_calexps["band"]==band]["mjd"]
         lc.data["visit"] = self.data_calexps[self.data_calexps["band"]==band]["visit"]
         lc.data["detector"] = self.data_calexps[self.data_calexps["band"]==band]["detector"]
         lc.simulate(params, model=model, plot=plot)
         lc.event_id = event_id
-        new_lc = {"event_id":event_id, "ra": ra, "dec": dec, "model": model, "band": band}
+        lc.blend_ra = blend_ra 
+        lc.blend_dec = blend_dec
+
+        new_lc = {"event_id":event_id, "ra": ra, "dec": dec, "model": model, "band": band, "blend_ra": blend_ra, "blend_dec": blend_dec, "blend_objId":blend_objId}
         if to_df:
             for key in params.keys():
                 if key not in self.data_events.columns:
-                    self.data_events[key] = None  
+                    self.data_events[key] = pd.NA
                 new_lc[key] = params[key] 
             self.data_events.loc[len(self.data_events)] = new_lc
             self.inj_lc.append(lc)
@@ -354,28 +450,6 @@ class Run:
             return False
         else:
             return Table(rows=catalog,names=["lc_id", "visit", "detector", "ra", "dec", "source_type", "exp_midpoint", "mag"])
-
-    # def check_injection_catalog(self, calexp, catalog, before_injection = True):
-    #     ra, dec = catalog["ra"], catalog["dec"]
-    #     if before_injection:
-    #         mask_visit = np.array(catalog["visit"] == calexp.data_id["visit"])
-    #         mask_detector = np.array(catalog["detector"] == calexp.data_id["detector"])
-    #         mask_contain = np.array(calexp.contains(ra, dec)) 
-    #         if False in mask_contain:
-    #             print("Light curves NOT contained: ", len([i for i in range(len(ra)) if not mask_contain[i]]))
-    #         mask_edge = np.array([calexp.check_edge(r, d, d=100) for r, d in zip(ra, dec)])
-    #         if True in mask_edge:
-    #             print("Light curves near edge: ", len([i for i in range(len(ra)) if mask_edge[i]]))
-    #         keep_mask = mask_contain & ~mask_edge & mask_detector & mask_visit
-    #     else:
-    #         mask_flag = np.array([i!=0 for i in catalog["injection_flag"]])
-    #         if True in mask_flag:
-    #             print("Light curves marked FLAG: ", [i for i in range(len(ra)) if mask_flag[i]])
-    #         keep_mask = ~mask_flag
-    #     filtered_catalog = catalog[keep_mask]
-    #     data_id = calexp.data_id
-    #     self.data_calexps.loc[(self.data_calexps["detector"] == data_id["detector"]) & (self.data_calexps["visit"] == data_id["visit"]), "ids_events"] = "-".join(map(str, self.data_events[self.data_events["ra"].isin(filtered_catalog["ra"].value)].index))
-    #     return filtered_catalog
 
 
         
@@ -436,50 +510,6 @@ class Run:
             config.doReplaceWithNoise = False
             self.tasks["Measurement"]  = ForcedMeasurementTask(schema, config=config)
         return schema
-
-    # def create_sources_table(self, pre_sources):
-    #     '''- self.measure_method  = "ForcedMeas" -> pre_sources = injected_catalog
-    #        - self.measure_method  = "SingleFrame" -> pre_sources = calexp"'''
-    #     if self.measure_method  == "ForcedMeas":
-    #         sources = afwTable.SourceCatalog(schema)
-    #         for source in pre_sources:
-    #             sourceRec = sources.addNew()
-    #             coord = geom.SpherePoint(geom.Angle(source["ra"], geom.degrees).asRadians(),geom.Angle(source["dec"], geom.degrees).asRadians(), geom.radians)
-    #             sourceRec.setCoord(coord)
-    #             sourceRec["centroid_x"], sourceRec["centroid_y"]= new_calexp.sky_to_pix(source["ra"], source["dec"])
-    #             sourceRec["type_flat"] = 0
-    #         self.log_task("Creating table to measure", det=len(sources))
-    #     elif self.measure_method == "SingleFrame":
-    #         tab = afwTable.SourceTable.make(schema)
-    #         result = self.tasks["Detection"].run(tab, pre_sources)
-    #         sources = result.sources
-    #         self.log_task("Detection", det=len(sources))
-    #     return sources
-            
-
-    # def measure_calexp(self, exposure, sources, schema):
-    #     if self.measure_method  == "SingleFrame":
-    #         self.tasks["Measurement"].run(measCat=sources, exposure=exposure)
-    #     elif self.measure_method  == "ForcedMeas":
-    #         forcedMeasCat = self.tasks["Measurement"].generateMeasCat(exposure, sources, exposure.getWcs())
-    #         self.tasks["Measurement"].run(forcedMeasCat, exposure, sources, exposure.getWcs())
-    #         sources = forcedMeasCat.asAstropy()            
-    #     self.log_task("Measurement", det = method)
-    #     return sources
-
-
-    # def find_flux(self, sources, ra, dec, save=None):
-    #     distances = [SpherePoint(ra,dec, degrees).separation(SpherePoint(sources["coord_ra"][i],sources["coord_dec"][i], radians)) for i in range(len(sources))]
-    #     id_near = np.argmin(distances)
-    #     dist = distances[id_near]
-    #     if dist>Angle(1e-6, radians):
-    #         print(f"Source not found. Distance = {dist} ")
-    #         return None, None
-    #     return sources["base_PsfFlux_instFlux"][id_near], sources["base_PsfFlux_instFluxErr"][id_near]
-
-    # def get_fluxes(self, sources):
-    #     if self.measure_method == "SinlgeFrame":
-    #         return 
 
 
     def measure_calexp(self, schema, calexp, injected_catalog):
@@ -734,18 +764,101 @@ def plot_event(path, events_id=None, model="Pacz", mag_lim=(30,14), figsize=(10,
         show=False if join else True
 
 
-def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
+# def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
+#     show = False if join else True
+#     data_event = pd.read_csv(run_path + "data_events.csv")
+#     n_ev = len(events_id)
+#     num_rows = n_ev * 2 if plot_fov else n_ev  # Define el número de filas dinámicamente
+#     fig, axs = plt.subplots(num_rows, 6, figsize=(20, num_rows * 3))
+    
+#     for i, event_id in enumerate(events_id):
+#         row_index = i * (2 if plot_fov else 1)  # Calcula la fila correctamente
+        
+#         lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(event_id) and file.endswith(".csv")])
+#         if len(lc_list)==0:
+#             print(f"There isn't event with id {event_id}. Skipping...")
+#             continue
+
+#         lc_list_ugrizy = []
+#         for band in "ugrizy":
+#             lc_band_path = [lc for lc in lc_list if f"_{band}" in lc][0]
+#             lc_list_ugrizy.append(lc_band_path)
+        
+#         for j, (lc_path, ax) in enumerate(zip(lc_list_ugrizy, axs[row_index])):  
+#             lc = LightCurve(data=run_path + lc_path)
+#             lc.model = "Pacz"
+#             lc.event_id = event_id
+            
+#             # Extraer parámetros del evento
+#             data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"] == lc.band)]
+#             t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
+#             lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
+            
+#             plt.sca(ax)
+#             lc.plot(title=None, mag_lim=None, figsize=None, show=False) 
+#             ax.invert_yaxis()
+#             ax.grid()
+#             ax.legend().remove()
+#             ax.set_title('')
+#             ax.tick_params(axis='y', labelsize=8)
+#             ax.tick_params(axis='x', labelsize=8)
+#             ax.set_xlabel("Epoch (MJD)", fontsize=10)
+#             ax.text(0.02, 0.98, f"eventId: {event_id}\nBand: {lc.band}", transform=ax.transAxes, 
+#                     fontsize=10, verticalalignment='top', horizontalalignment='left')
+            
+#             if i != n_ev - 1:
+#                 ax.set_xticklabels([])
+#                 ax.set_xticks([])
+#                 ax.set_xlabel("")
+            
+#             if j != 0:
+#                 ax.set_ylabel("")
+        
+#         if plot_fov:
+#             for j, (lc_path, img_ax) in enumerate(zip(lc_list_ugrizy, axs[row_index + 1])):  
+#                 img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
+#                 if os.path.exists(img_path):
+#                     img = imread(img_path)
+#                     y_start, y_end = 30, -20
+#                     x_start, x_end = 40, -30
+#                     img_cropped = img[y_start:y_end, x_start:x_end]
+#                     img_ax.imshow(img_cropped)
+#                     band = lc_path.split(".")[0].split("_")[-1]
+#                     img_ax.set_title(f"Event {event_id} - Band: {band}", fontsize=10)
+#                     img_ax.set_xlabel("RA (deg)", fontsize=10)
+#                     img_ax.set_ylabel("Dec (deg)", fontsize=10)
+
+#                     # img_ax.tick_params(axis='both', which='both', length=0) 
+
+#                     img_ax.set_xticks([])
+#                     img_ax.set_yticks([])
+#                     img_ax.set_xticklabels([])
+#                     img_ax.set_yticklabels([])
+
+#                     img_ax.spines['top'].set_visible(False)
+#                     img_ax.spines['right'].set_visible(False)
+#                     img_ax.spines['left'].set_visible(False)
+#                     img_ax.spines['bottom'].set_visible(False)
+
+#                 else:
+#                     img_ax.axis("off")  
+
+#     plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
+#     plt.tight_layout(pad=0.000001)
+#     plt.savefig(run_path + name, bbox_inches='tight')
+
+def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True, bands="ugrizy"):
     show = False if join else True
     data_event = pd.read_csv(run_path + "data_events.csv")
     n_ev = len(events_id)
-    num_rows = n_ev * 2 if plot_fov else n_ev  # Define el número de filas dinámicamente
+    num_rows = n_ev * 2 if plot_fov else n_ev  
     fig, axs = plt.subplots(num_rows, 6, figsize=(20, num_rows * 3))
     
     for i, event_id in enumerate(events_id):
-        row_index = i * (2 if plot_fov else 1)  # Calcula la fila correctamente
-        
+        row_index = i * (2 if plot_fov else 1)  # Fila para la curva de luz
+
         lc_list = sorted([file for file in os.listdir(run_path) if file.startswith("lc") and file.split("_")[1] == str(event_id) and file.endswith(".csv")])
-        if len(lc_list)==0:
+        if len(lc_list) == 0:
             print(f"There isn't event with id {event_id}. Skipping...")
             continue
 
@@ -759,8 +872,7 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
             lc.model = "Pacz"
             lc.event_id = event_id
             
-            # Extraer parámetros del evento
-            data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"] == lc.band)]
+            data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"].str.upper() == lc.band.upper())]
             t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
             lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
             
@@ -770,9 +882,9 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
             ax.grid()
             ax.legend().remove()
             ax.set_title('')
-            ax.tick_params(axis='y', labelsize=8)
-            ax.tick_params(axis='x', labelsize=8)
-            ax.set_xlabel("Epoch (MJD)", fontsize=10)
+            ax.tick_params(axis='y', labelsize=6)
+            ax.tick_params(axis='x', labelsize=6)
+            ax.set_xlabel("Epoch (MJD)", fontsize=8)
             ax.text(0.02, 0.98, f"eventId: {event_id}\nBand: {lc.band}", transform=ax.transAxes, 
                     fontsize=10, verticalalignment='top', horizontalalignment='left')
             
@@ -785,40 +897,44 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True):
                 ax.set_ylabel("")
         
         if plot_fov:
-            for j, (lc_path, img_ax) in enumerate(zip(lc_list_ugrizy, axs[row_index + 1])):  
-                img_path = os.path.join(run_path, lc_path.split(".")[0] + ".png")
-                if os.path.exists(img_path):
-                    img = imread(img_path)
-                    y_start, y_end = 30, -20
-                    x_start, x_end = 40, -30
-                    img_cropped = img[y_start:y_end, x_start:x_end]
-                    img_ax.imshow(img_cropped)
-                    band = lc_path.split(".")[0].split("_")[-1]
-                    img_ax.set_title(f"Event {event_id} - Band: {band}", fontsize=10)
-                    img_ax.set_xlabel("RA (deg)", fontsize=10)
-                    img_ax.set_ylabel("Dec (deg)", fontsize=10)
+            data_calexp = pd.read_csv(run_path+"data_calexps.csv")
+            calexp_row_index = row_index + 1
+            
+            for j, (lc_path, img_ax) in enumerate(zip(lc_list_ugrizy, axs[calexp_row_index])):  
+                img_ax.set_xticks([])
+                img_ax.set_yticks([])
+                img_ax.set_xticklabels([])
+                img_ax.set_yticklabels([])
+                img_ax.set_ylabel("")
+                img_ax.spines['top'].set_visible(False)
+                img_ax.spines['right'].set_visible(False)
+                img_ax.spines['left'].set_visible(False)
+                img_ax.spines['bottom'].set_visible(False)
 
-                    # img_ax.tick_params(axis='both', which='both', length=0) 
-                    # img_ax.spines['top'].set_visible(False)  
-                    # img_ax.spines['right'].set_visible(False) 
-                    # img_ax.spines['left'].set_visible(False) 
-                    # img_ax.spines['bottom'].set_visible(False)
+                img_ax.get_xaxis().set_visible(False)
+                img_ax.get_yaxis().set_visible(False)
+                
+                lc = LightCurve(path = run_path + lc_path)
+                calexp_data = lc.data.loc[0]
+                calexp_id = data_calexp[(data_calexp["visit"]==calexp_data["visit"]) & (data_calexp["detector"]==calexp_data["detector"])].index[0]
+                calexp = Calexp(run_path+f"calexp_{calexp_id}_{lc.band}.fit")
+                img_ax = fig.add_subplot(num_rows, 6, calexp_row_index * 6 + j + 1, projection=WCS(calexp.wcs.getFitsMetadata()))  
 
-                    img_ax.set_xticks([])
-                    img_ax.set_yticks([])
-                    img_ax.set_xticklabels([])
-                    img_ax.set_yticklabels([])
-
-                    img_ax.spines['top'].set_visible(False)
-                    img_ax.spines['right'].set_visible(False)
-                    img_ax.spines['left'].set_visible(False)
-                    img_ax.spines['bottom'].set_visible(False)
-
+                roi = [(lc.ra, lc.dec), 200]
+                calexp.plot(fig=fig, ax=img_ax, roi=roi, figsize=(6,6), y_label=False) 
+                calexp.add_point(img_ax, lc.ra, lc.dec, r=40)
+                img_ax.set_title(f"Event {event_id} - Band: {lc.band}", fontsize=8)
+                img_ax.tick_params(axis='y', labelsize=6)
+                img_ax.tick_params(axis='x', labelsize=6)
+                if j != 0:
+                    img_ax.set_ylabel(" ")
                 else:
-                    img_ax.axis("off")  
+                    img_ax.set_ylabel('Dec (degrees)', labelpad=0.05)
 
-    plt.subplots_adjust(hspace=0.00001, wspace=0.05) 
-    plt.tight_layout(pad=0.000001)
+
+
+    plt.subplots_adjust(hspace=0.3, wspace=0.3) 
+    # plt.tight_layout(pad=0.000001)
     plt.savefig(run_path + name, bbox_inches='tight')
 
 
