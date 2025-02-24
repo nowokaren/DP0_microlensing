@@ -148,7 +148,7 @@ class Calexp:
         return cutout
     
 
-    def plot(self, title=None, fig=None, ax=None, warp=None, roi=None, ticks=8, cut_size=401, col=None, figsize=None, n_ticks = (10,10), show=True):
+    def plot(self, title=None, fig=None, ax=None, warp=None, roi=None, ticks=8, cut_size=401, col=None, figsize=None, n_ticks = (10,10), show=True, x_label=True, y_label=True):
         '''warp: calexp_ref'''
         return_ax = False
         if fig is None:
@@ -164,8 +164,14 @@ class Calexp:
             ax = plt.subplot(projection=WCS(warp.wcs.getFitsMetadata()))
             return_ax = True
         ax.set_title(title, fontsize=8)
-        ax.set_xlabel('RA (degrees)', fontsize=8)
-        ax.set_ylabel('Dec (degrees)', fontsize=8)
+        if x_label:
+            ax.set_xlabel('RA (degrees)', fontsize=8)
+        else:
+            ax.coords[0].set_axislabel("")
+        if y_label:
+            ax.set_ylabel('Dec (degrees)', fontsize=8)
+        else:
+            ax.coords[1].set_axislabel("")
         ax.coords['ra'].set_format_unit(u.deg)
 
         # ax.coords['ra'].set_ticks(number=n_ticks[0])

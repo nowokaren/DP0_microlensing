@@ -872,7 +872,7 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True, bands
             lc.model = "Pacz"
             lc.event_id = event_id
             
-            data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"] == lc.band)]
+            data_lc = data_event[(data_event["event_id"] == event_id) & (data_event["band"].str.upper() == lc.band.upper())]
             t_0, t_E, u_0, m_base = data_lc[["t_0", "t_E", "u_0", "m_base"]].values[0]
             lc.params = {key: val for key, val in zip(["t_0", "t_E", "u_0", "m_base"], [t_0, t_E, u_0, m_base])}
             
@@ -882,9 +882,9 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True, bands
             ax.grid()
             ax.legend().remove()
             ax.set_title('')
-            ax.tick_params(axis='y', labelsize=8)
-            ax.tick_params(axis='x', labelsize=8)
-            ax.set_xlabel("Epoch (MJD)", fontsize=10)
+            ax.tick_params(axis='y', labelsize=6)
+            ax.tick_params(axis='x', labelsize=6)
+            ax.set_xlabel("Epoch (MJD)", fontsize=8)
             ax.text(0.02, 0.98, f"eventId: {event_id}\nBand: {lc.band}", transform=ax.transAxes, 
                     fontsize=10, verticalalignment='top', horizontalalignment='left')
             
@@ -911,11 +911,8 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True, bands
                 img_ax.spines['left'].set_visible(False)
                 img_ax.spines['bottom'].set_visible(False)
 
-                img_ax.grid(False)
                 img_ax.get_xaxis().set_visible(False)
                 img_ax.get_yaxis().set_visible(False)
-
-                img_ax.grid(False)
                 
                 lc = LightCurve(path = run_path + lc_path)
                 calexp_data = lc.data.loc[0]
@@ -924,16 +921,19 @@ def plot_lc_examples(run_path, events_id, name, join=False, plot_fov=True, bands
                 img_ax = fig.add_subplot(num_rows, 6, calexp_row_index * 6 + j + 1, projection=WCS(calexp.wcs.getFitsMetadata()))  
 
                 roi = [(lc.ra, lc.dec), 200]
-                calexp.plot(fig=fig, ax=img_ax, roi=roi, figsize=(6,6)) 
+                calexp.plot(fig=fig, ax=img_ax, roi=roi, figsize=(6,6), y_label=False) 
                 calexp.add_point(img_ax, lc.ra, lc.dec, r=40)
-                img_ax.set_title(f"Event {event_id} - Band: {lc.band}", fontsize=10)
-                img_ax.set_ylabel('Dec (degrees)', labelpad=0.1)
+                img_ax.set_title(f"Event {event_id} - Band: {lc.band}", fontsize=8)
                 img_ax.tick_params(axis='y', labelsize=6)
                 img_ax.tick_params(axis='x', labelsize=6)
+                if j != 0:
+                    img_ax.set_ylabel(" ")
+                else:
+                    img_ax.set_ylabel('Dec (degrees)', labelpad=0.05)
 
 
 
-    plt.subplots_adjust(hspace=0.3, wspace=0.8) 
+    plt.subplots_adjust(hspace=0.3, wspace=0.3) 
     # plt.tight_layout(pad=0.000001)
     plt.savefig(run_path + name, bbox_inches='tight')
 

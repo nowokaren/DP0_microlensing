@@ -68,9 +68,9 @@ class LightCurve:
 
 
     def __str__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec})")
     def __repr__(self):
-        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec}")
+        return (f"LightCurve ({self.ra}, {self.dec}) - Band {self.band} - Event ID: {self.event_id} - Points: {len(self.data)} - Blend: ({self.blend_ra}, {self.blend_dec})")
 
     def _load_dataframe(self, data, columns):
         if data is None:
@@ -207,6 +207,9 @@ class LightCurve:
 
         self.ra = float(metadata.get("ra", "nan"))
         self.dec = float(metadata.get("dec", "nan"))
+        self.blend_ra = float(metadata.get("blend_ra", "nan")) 
+        self.blend_dec = float(metadata.get("blend_dec", "nan"))
+        self.blend_objId = float(metadata.get("blend_objId", "nan"))
         self.event_id = int(path.split("/")[-1].split("_")[1])
         self.band = metadata.get("band")
         self.model = metadata.get("model")
