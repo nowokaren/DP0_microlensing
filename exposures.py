@@ -173,22 +173,12 @@ class Calexp:
         else:
             ax.coords[1].set_axislabel("")
         ax.coords['ra'].set_format_unit(u.deg)
-
-        # ax.coords['ra'].set_ticks(number=n_ticks[0])
-        # ax.coords['dec'].set_ticks(number=n_ticks[1])
         ax.coords['ra'].set_ticklabel(rotation=30, fontsize=8, pad = 15)
-        # ax.coords['dec'].set_ticklabel(rotation=-30, fontsize=6)
 
         ra_corners, _ = self.get_corners()
         space = (abs(ra_corners[1]-ra_corners[0]))/(ticks+2)
         if roi is not None:
             space*=(roi[1]/min(self.expF.getDimensions()))
-        # ra_corners, _ = self.get_corners()
-        # space = max((abs(ra_corners[1] - ra_corners[0])) / (ticks + 2), 0.1)  # Minimum spacing of 0.1 degrees
-        # if roi is not None:
-        #     scale_factor = roi[1] / min(self.expF.getDimensions())
-        #     space = max(space * scale_factor, 0.1)  # Ensure spacing is at least 0.1 degrees
-
         ax.coords['ra'].set_ticks(spacing=space * u.deg)  
         ax.coords['dec'].set_ticks(spacing=space * u.deg)
 
